@@ -1,13 +1,8 @@
 {
-  "functions": {
-    "api/sync.py": {
-      "runtime": "python3.11"
-    }
-  },
-  "routes": [
+  "rewrites": [
     {
-      "src": "/api/sync",
-      "dest": "/api/sync.py"
+      "source": "/api/sync",
+      "destination": "/api/sync.py"
     }
   ]
 }
