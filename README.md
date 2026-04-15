@@ -47,7 +47,7 @@ python sync_artist_report.py ^
 
 ## Деплой на Vercel (API)
 
-У репозиторій додано endpoint `POST /api/sync`.
+У репозиторій додано Python entrypoint `main.py` з endpoint `POST /api/sync`.
 
 ### Environment Variables у Vercel
 

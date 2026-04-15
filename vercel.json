@@ -1,8 +1,0 @@
-{
-  "rewrites": [
-    {
-      "source": "/api/sync",
-      "destination": "/api/main.py"
-    }
-  ]
-}
