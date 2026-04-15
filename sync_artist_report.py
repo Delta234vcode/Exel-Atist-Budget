@@ -29,6 +29,10 @@ SCOPES = [
 def normalize(text: str) -> str:
     """Normalize row labels for reliable matching."""
     text = (text or "").strip().lower()
+    text = text.replace("-", " ")
+    text = text.replace("_", " ")
+    # Remove punctuation to match labels like "tik-tok" vs "tik tok".
+    text = re.sub(r"[^\w\s]", " ", text)
     text = re.sub(r"\s+", " ", text)
     text = text.replace("ё", "е")
     return text
@@ -74,11 +78,18 @@ def discover_header_indexes(headers: List[str]) -> Dict[str, Optional[int]]:
                     return i
         return None
 
-    return {
+    result = {
         "name": find(["plan", "fee", "cost", "name", "статья", "витрата", "витрати"]),
         "amount": find(["fact eur", "fact eu", "fact", "amount", "netto", "sum", "сума"]),
         "link": find(["description", "invoice", "link", "посилання", "інвойс"]),
     }
+    # Optional alternates for better amount extraction in mixed templates.
+    result["amount_fact"] = find(["fact eur", "fact eu", "fact"])
+    result["amount_brutto"] = find(["brutto", "gross"])
+    result["amount_vat"] = find(["vat"])
+    result["amount_netto"] = find(["netto", "net"])
+    result["amount_sum"] = find(["sum", "сума", "amount"])
+    return result
 
 
 def extract_sheet_id(sheet_url: str) -> str:
@@ -104,7 +115,13 @@ def get_source_data(ws: gspread.Worksheet, header_row: int) -> Dict[str, SourceR
     idx = discover_header_indexes(headers)
 
     name_idx = idx["name"] if idx["name"] is not None else 0
-    amount_idx = idx["amount"] if idx["amount"] is not None else 1
+    amount_candidates: List[int] = []
+    for key in ["amount_fact", "amount_brutto", "amount_vat", "amount_sum", "amount_netto", "amount"]:
+        col_idx = idx.get(key)
+        if col_idx is not None and col_idx not in amount_candidates:
+            amount_candidates.append(col_idx)
+    if not amount_candidates:
+        amount_candidates = [1]
     link_idx = idx["link"]
 
     result: Dict[str, SourceRow] = {}
@@ -115,10 +132,15 @@ def get_source_data(ws: gspread.Worksheet, header_row: int) -> Dict[str, SourceR
         if not name:
             continue
 
-        amount_raw = row[amount_idx] if amount_idx < len(row) else ""
-        amount = parse_number(amount_raw)
+        amount = None
+        for amount_idx in amount_candidates:
+            amount_raw = row[amount_idx] if amount_idx < len(row) else ""
+            amount = parse_number(amount_raw)
+            # Prefer the first non-zero parsed value.
+            if amount not in (None, 0):
+                break
         if amount is None:
-            continue
+            amount = 0.0
 
         link = None
         if link_idx is not None and link_idx < len(row):
@@ -134,6 +156,18 @@ def get_source_data(ws: gspread.Worksheet, header_row: int) -> Dict[str, SourceR
                     m = re.search(r'"(https?://[^"]+)"', formula)
                     if m:
                         link = m.group(1)
+        # Fallback: try finding a hyperlink formula in any cell of the row.
+        if not link:
+            for col in range(1, len(row) + 1):
+                formula = ws.acell(
+                    gspread.utils.rowcol_to_a1(row_number, col),
+                    value_render_option="FORMULA",
+                ).value
+                if formula and "HYPERLINK" in formula.upper():
+                    m = re.search(r'"(https?://[^"]+)"', formula)
+                    if m:
+                        link = m.group(1)
+                        break
 
         result[normalize(name)] = SourceRow(name=name, amount=amount, link=link)
     return result
@@ -220,7 +254,7 @@ def main() -> None:
     parser.add_argument("--service-account", required=True, help="Path to Google service account JSON")
     parser.add_argument("--source-sheet-name", default=None, help="Optional source tab name")
     parser.add_argument("--target-sheet-name", default=None, help="Optional target tab name")
-    parser.add_argument("--source-header-row", type=int, default=9, help="Header row in source sheet")
+    parser.add_argument("--source-header-row", type=int, default=15, help="Header row in source sheet")
     parser.add_argument("--target-header-row", type=int, default=9, help="Header row in target sheet")
     args = parser.parse_args()
 

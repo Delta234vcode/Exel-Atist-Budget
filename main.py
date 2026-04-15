@@ -23,7 +23,7 @@ def _run_sync(body: Dict[str, Any]):
     target_url = body.get("target_url") or os.getenv("TARGET_SHEET_URL")
     source_sheet_name = body.get("source_sheet_name")
     target_sheet_name = body.get("target_sheet_name")
-    source_header_row = int(body.get("source_header_row", 9))
+    source_header_row = int(body.get("source_header_row", 15))
     target_header_row = int(body.get("target_header_row", 9))
 
     if not source_url or not target_url:

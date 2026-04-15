@@ -34,7 +34,7 @@ python sync_artist_report.py ^
 
 - `--source-sheet-name "Tab name"`: якщо треба не перший лист.
 - `--target-sheet-name "Tab name"`: якщо треба не перший лист.
-- `--source-header-row 9`: рядок із заголовками у вашій таблиці.
+- `--source-header-row 15`: рядок із заголовками у вашій таблиці (для блоку Plan costs).
 - `--target-header-row 9`: рядок із заголовками у таблиці артиста.
 
 ## Як працює зіставлення
