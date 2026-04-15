@@ -11,6 +11,7 @@ What it does:
 from __future__ import annotations
 
 import argparse
+from datetime import datetime
 import difflib
 import re
 from dataclasses import dataclass
@@ -25,7 +26,7 @@ from google.oauth2.service_account import Credentials
 
 SCOPES = [
     "https://www.googleapis.com/auth/spreadsheets",
-    "https://www.googleapis.com/auth/drive.readonly",
+    "https://www.googleapis.com/auth/drive",
 ]
 
 T = TypeVar("T")
@@ -276,6 +277,35 @@ def extract_sheet_id(sheet_url: str) -> str:
     if not match:
         raise ValueError(f"Could not extract sheet id from URL: {sheet_url}")
     return match.group(1)
+
+
+def create_artist_sheet_from_source(
+    client: gspread.Client,
+    source_url: str,
+    title_prefix: str = "Artist Report",
+) -> str:
+    """
+    Create a new artist spreadsheet by copying source sheet file.
+    This preserves original formatting/design as-is.
+    """
+    source_id = extract_sheet_id(source_url)
+    timestamp = datetime.utcnow().strftime("%Y-%m-%d %H-%M")
+    copied = with_backoff(
+        lambda: client.copy(
+            source_id,
+            title=f"{title_prefix} {timestamp}",
+            copy_permissions=False,
+        )
+    )
+
+    if hasattr(copied, "id"):
+        new_id = copied.id
+    elif isinstance(copied, dict) and copied.get("id"):
+        new_id = copied["id"]
+    else:
+        raise ValueError("Could not get new spreadsheet id after copy.")
+
+    return f"https://docs.google.com/spreadsheets/d/{new_id}/edit"
 
 
 @dataclass

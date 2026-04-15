@@ -155,7 +155,7 @@
       <div class="card">
         <div class="header">
           <h1>Excel Artist Budget Sync</h1>
-          <p>Встав 2 посилання та натисни кнопку. Бот перенесе бюджет і інвойси.</p>
+          <p>Встав загальну таблицю. Таблиця артиста опційна: якщо порожня — створимо автоматично.</p>
         </div>
 
         <div class="content">
@@ -174,8 +174,7 @@
             <input
               id="targetUrl"
               type="url"
-              placeholder="https://docs.google.com/spreadsheets/d/..."
-              required
+              placeholder="(опційно) https://docs.google.com/spreadsheets/d/..."
             />
           </div>
 
@@ -228,8 +227,8 @@
         const source_url = sourceInput.value.trim();
         const target_url = targetInput.value.trim();
 
-        if (!source_url || !target_url) {
-          showResult("Заповни обидва поля з посиланнями.", true);
+        if (!source_url) {
+          showResult("Заповни посилання на загальну таблицю.", true);
           return;
         }
 
@@ -244,6 +243,7 @@
             body: JSON.stringify({
               source_url,
               target_url,
+              auto_create_target: true,
             }),
           });
 
@@ -254,6 +254,10 @@
 
           showResult(
             `Готово!\nЗбіглося рядків: ${data.matched_rows}\nОновлено клітинок: ${data.updated_cells}${
+              data.new_target_created
+                ? "\nСтворено нову таблицю артиста як копію оригіналу."
+                : ""
+            }${
               data.matched_rows === 0 && data.debug
                 ? `\n\nДіагностика:\nsource_rows_loaded: ${data.debug.source_rows_loaded}\ndetected_source_header_row: ${data.debug.detected_source_header_row}\nsource_keys_sample: ${(data.debug.source_keys_sample || []).join(", ")}\ntarget_rows_total: ${data.debug.target_rows_total}\ndetected_target_header_row: ${data.debug.detected_target_header_row}\nname_col_idx: ${data.debug.target_name_column_index}\namount_col_idx: ${data.debug.target_amount_column_index}\nunmatched sample: ${(data.debug.unmatched_targets_sample || []).join(", ")}`
                 : ""

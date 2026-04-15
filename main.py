@@ -5,6 +5,7 @@ from flask import Flask, jsonify, render_template, request
 
 from sync_artist_report import (
     build_client_from_info,
+    create_artist_sheet_from_source,
     extract_sheet_id,
     parse_service_account_json,
     sync,
@@ -20,15 +21,17 @@ def _json_error(message: str, status: int):
 
 def _run_sync(body: Dict[str, Any]):
     source_url = body.get("source_url") or os.getenv("SOURCE_SHEET_URL")
-    target_url = body.get("target_url") or os.getenv("TARGET_SHEET_URL")
+    target_url = (body.get("target_url") or os.getenv("TARGET_SHEET_URL") or "").strip()
+    auto_create_target = bool(body.get("auto_create_target", True))
+    new_target_created = False
     source_sheet_name = body.get("source_sheet_name")
     target_sheet_name = body.get("target_sheet_name")
     source_header_row = int(body.get("source_header_row", 15))
     target_header_row = int(body.get("target_header_row", 9))
 
-    if not source_url or not target_url:
+    if not source_url:
         return None, _json_error(
-            "source_url and target_url are required (body or env vars)",
+            "source_url is required (body or env vars)",
             400,
         )
 
@@ -37,6 +40,12 @@ def _run_sync(body: Dict[str, Any]):
         return None, _json_error("SERVICE_ACCOUNT_JSON is not set", 500)
 
     client = build_client_from_info(parse_service_account_json(service_account_json))
+    if not target_url:
+        if not auto_create_target:
+            return None, _json_error("target_url is empty and auto_create_target=false", 400)
+        target_url = create_artist_sheet_from_source(client, source_url)
+        new_target_created = True
+
     matched, updates, debug = sync(
         client=client,
         source_url=source_url,
@@ -55,6 +64,7 @@ def _run_sync(body: Dict[str, Any]):
         "ok": True,
         "matched_rows": matched,
         "updated_cells": updates,
+        "new_target_created": new_target_created,
         "target_open_url": target_open_url,
         "target_xlsx_url": target_xlsx_url,
         "debug": debug,
