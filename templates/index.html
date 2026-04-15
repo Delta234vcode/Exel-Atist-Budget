@@ -130,6 +130,24 @@
       .result.ok {
         color: var(--ok);
       }
+
+      .links {
+        margin-top: 10px;
+        display: flex;
+        gap: 10px;
+        flex-wrap: wrap;
+      }
+
+      .link-btn {
+        display: inline-block;
+        text-decoration: none;
+        border-radius: 10px;
+        padding: 9px 12px;
+        font-weight: 600;
+        border: 1px solid #b6dec6;
+        color: #0a5b2f;
+        background: #f3fcf7;
+      }
     </style>
   </head>
   <body>
@@ -173,10 +191,37 @@
       const sourceInput = document.getElementById("sourceUrl");
       const targetInput = document.getElementById("targetUrl");
 
-      function showResult(text, isError = false) {
+      function showResult(text, isError = false, links = null) {
         resultBox.style.display = "block";
         resultBox.className = `result ${isError ? "error" : "ok"}`;
         resultBox.textContent = text;
+
+        if (links && !isError) {
+          const linksWrap = document.createElement("div");
+          linksWrap.className = "links";
+
+          if (links.openUrl) {
+            const openLink = document.createElement("a");
+            openLink.className = "link-btn";
+            openLink.href = links.openUrl;
+            openLink.target = "_blank";
+            openLink.rel = "noopener noreferrer";
+            openLink.textContent = "Відкрити оновлену таблицю";
+            linksWrap.appendChild(openLink);
+          }
+
+          if (links.xlsxUrl) {
+            const xlsxLink = document.createElement("a");
+            xlsxLink.className = "link-btn";
+            xlsxLink.href = links.xlsxUrl;
+            xlsxLink.target = "_blank";
+            xlsxLink.rel = "noopener noreferrer";
+            xlsxLink.textContent = "Скачати XLSX файл";
+            linksWrap.appendChild(xlsxLink);
+          }
+
+          resultBox.appendChild(linksWrap);
+        }
       }
 
       runBtn.addEventListener("click", async () => {
@@ -208,7 +253,12 @@
           }
 
           showResult(
-            `Готово!\nЗбіглося рядків: ${data.matched_rows}\nОновлено клітинок: ${data.updated_cells}`
+            `Готово!\nЗбіглося рядків: ${data.matched_rows}\nОновлено клітинок: ${data.updated_cells}`,
+            false,
+            {
+              openUrl: data.target_open_url,
+              xlsxUrl: data.target_xlsx_url,
+            }
           );
         } catch (err) {
           showResult(`Помилка: ${err.message}`, true);

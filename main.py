@@ -5,6 +5,7 @@ from flask import Flask, jsonify, render_template, request
 
 from sync_artist_report import (
     build_client_from_info,
+    extract_sheet_id,
     parse_service_account_json,
     sync,
 )
@@ -45,7 +46,18 @@ def _run_sync(body: Dict[str, Any]):
         source_header_row=source_header_row,
         target_header_row=target_header_row,
     )
-    return {"ok": True, "matched_rows": matched, "updated_cells": updates}, None
+    target_sheet_id = extract_sheet_id(target_url)
+    target_open_url = f"https://docs.google.com/spreadsheets/d/{target_sheet_id}/edit"
+    target_xlsx_url = (
+        f"https://docs.google.com/spreadsheets/d/{target_sheet_id}/export?format=xlsx"
+    )
+    return {
+        "ok": True,
+        "matched_rows": matched,
+        "updated_cells": updates,
+        "target_open_url": target_open_url,
+        "target_xlsx_url": target_xlsx_url,
+    }, None
 
 
 def _is_same_origin() -> bool:
