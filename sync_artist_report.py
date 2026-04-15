@@ -141,6 +141,56 @@ def parse_number(value: str) -> Optional[float]:
         return None
 
 
+def is_probably_numeric(text: str) -> bool:
+    return parse_number(text) is not None
+
+
+def infer_name_column(
+    values: List[List[str]], header_row: int, fallback_idx: int, sample_rows: int = 120
+) -> int:
+    """
+    Choose the most likely "expense name" column by scanning content under headers.
+    We prefer columns with many textual labels and few numeric cells.
+    """
+    if not values:
+        return fallback_idx
+
+    max_cols = max((len(r) for r in values), default=fallback_idx + 1)
+    start = header_row
+    end = min(len(values), header_row + sample_rows)
+    best_idx = fallback_idx
+    best_score = -1.0
+
+    for col in range(max_cols):
+        text_count = 0
+        numeric_count = 0
+        non_empty = 0
+        for r in range(start, end):
+            row = values[r]
+            if col >= len(row):
+                continue
+            cell = (row[col] or "").strip()
+            if not cell:
+                continue
+            non_empty += 1
+            if is_probably_numeric(cell):
+                numeric_count += 1
+            else:
+                text_count += 1
+
+        if non_empty == 0:
+            continue
+        score = text_count - (numeric_count * 1.2)
+        # Slight preference to the left-most columns (typical for row labels).
+        score -= col * 0.05
+
+        if score > best_score:
+            best_score = score
+            best_idx = col
+
+    return best_idx
+
+
 def discover_header_indexes(headers: List[str]) -> Dict[str, Optional[int]]:
     normalized = [normalize(h) for h in headers]
 
@@ -252,6 +302,7 @@ def get_source_data(
     idx = discover_header_indexes(headers)
 
     name_idx = idx["name"] if idx["name"] is not None else 0
+    name_idx = infer_name_column(values, header_row, name_idx)
     amount_candidates: List[int] = []
     for key in ["amount_fact", "amount_brutto", "amount_vat", "amount_sum", "amount_netto", "amount"]:
         col_idx = idx.get(key)
@@ -350,6 +401,7 @@ def sync(
     target_headers = target_values[target_header_row - 1]
     target_idx = discover_header_indexes(target_headers)
     target_name_idx = target_idx["name"] if target_idx["name"] is not None else 0
+    target_name_idx = infer_name_column(target_values, target_header_row, target_name_idx)
     target_amount_idx = target_idx["amount"] if target_idx["amount"] is not None else 2
     target_link_idx = target_idx["link"]
 
