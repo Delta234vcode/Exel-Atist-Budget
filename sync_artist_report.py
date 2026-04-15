@@ -175,7 +175,9 @@ def has_amount_candidate(idx: Dict[str, Optional[int]]) -> bool:
     return False
 
 
-def detect_header_row(values: List[List[str]], preferred_row: int) -> int:
+def detect_header_row(
+    values: List[List[str]], preferred_row: int, require_link: bool = False
+) -> int:
     """
     Detect the best header row if preferred row looks invalid.
     Returns 1-indexed row number.
@@ -183,15 +185,40 @@ def detect_header_row(values: List[List[str]], preferred_row: int) -> int:
     if values:
         if 1 <= preferred_row <= len(values):
             preferred_idx = discover_header_indexes(values[preferred_row - 1])
-            if preferred_idx.get("name") is not None and has_amount_candidate(preferred_idx):
+            if (
+                preferred_idx.get("name") is not None
+                and has_amount_candidate(preferred_idx)
+                and (not require_link or preferred_idx.get("link") is not None)
+            ):
                 return preferred_row
 
     search_limit = min(len(values), 40)
+    best_row = max(1, preferred_row)
+    best_score = -1
     for row_number in range(1, search_limit + 1):
         idx = discover_header_indexes(values[row_number - 1])
-        if idx.get("name") is not None and has_amount_candidate(idx):
-            return row_number
-    return max(1, preferred_row)
+        if idx.get("name") is None or not has_amount_candidate(idx):
+            continue
+        if require_link and idx.get("link") is None:
+            continue
+
+        score = 2
+        if idx.get("link") is not None:
+            score += 3
+        # Prefer costs block headers over selling block headers.
+        header_text = normalize(" ".join(values[row_number - 1]))
+        if "plan costs" in header_text or "description" in header_text:
+            score += 3
+        if "netto" in header_text or "brutto" in header_text:
+            score += 2
+        # Slight bias towards preferred row neighborhood.
+        score -= abs(row_number - preferred_row) * 0.05
+
+        if score > best_score:
+            best_score = score
+            best_row = row_number
+
+    return best_row
 
 
 def extract_sheet_id(sheet_url: str) -> str:
@@ -208,14 +235,16 @@ class SourceRow:
     link: Optional[str]
 
 
-def get_source_data(ws: gspread.Worksheet, header_row: int) -> Dict[str, SourceRow]:
+def get_source_data(
+    ws: gspread.Worksheet, header_row: int
+) -> Tuple[Dict[str, SourceRow], int]:
     values = with_backoff(lambda: ws.get_all_values())
     formula_values = with_backoff(
         lambda: ws.get_all_values(value_render_option="FORMULA")
     )
     if not values:
         raise ValueError("Source sheet is empty.")
-    header_row = detect_header_row(values, header_row)
+    header_row = detect_header_row(values, header_row, require_link=True)
     if len(values) < header_row:
         raise ValueError("Header row is outside the sheet range.")
 
@@ -285,7 +314,7 @@ def get_source_data(ws: gspread.Worksheet, header_row: int) -> Dict[str, SourceR
                         break
 
         result[normalize(name)] = SourceRow(name=name, amount=amount, link=link)
-    return result
+    return result, header_row
 
 
 def format_amount_for_sheet(amount: float) -> str:
@@ -307,9 +336,13 @@ def sync(
     source_ws = source.worksheet(source_sheet_name) if source_sheet_name else source.sheet1
     target_ws = target.worksheet(target_sheet_name) if target_sheet_name else target.sheet1
 
-    source_map = get_source_data(source_ws, source_header_row)
+    source_map, detected_source_header_row = get_source_data(
+        source_ws, source_header_row
+    )
     target_values = with_backoff(lambda: target_ws.get_all_values())
-    detected_target_header_row = detect_header_row(target_values, target_header_row)
+    detected_target_header_row = detect_header_row(
+        target_values, target_header_row, require_link=False
+    )
     target_header_row = detected_target_header_row
     if len(target_values) < target_header_row:
         raise ValueError("Target header row is outside the sheet range.")
@@ -363,6 +396,8 @@ def sync(
 
     debug = {
         "source_rows_loaded": len(source_map),
+        "detected_source_header_row": detected_source_header_row,
+        "source_keys_sample": list(source_map.keys())[:20],
         "target_rows_total": max(0, len(target_values) - target_header_row),
         "detected_target_header_row": detected_target_header_row,
         "target_name_column_index": target_name_idx,
