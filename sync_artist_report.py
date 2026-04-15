@@ -152,7 +152,7 @@ def get_source_data(ws: gspread.Worksheet, header_row: int) -> Dict[str, SourceR
                     gspread.utils.rowcol_to_a1(row_number, link_idx + 1),
                     value_render_option="FORMULA",
                 ).value
-                if formula and "HYPERLINK" in formula.upper():
+                if isinstance(formula, str) and "HYPERLINK" in formula.upper():
                     m = re.search(r'"(https?://[^"]+)"', formula)
                     if m:
                         link = m.group(1)
@@ -163,7 +163,7 @@ def get_source_data(ws: gspread.Worksheet, header_row: int) -> Dict[str, SourceR
                     gspread.utils.rowcol_to_a1(row_number, col),
                     value_render_option="FORMULA",
                 ).value
-                if formula and "HYPERLINK" in formula.upper():
+                if isinstance(formula, str) and "HYPERLINK" in formula.upper():
                     m = re.search(r'"(https?://[^"]+)"', formula)
                     if m:
                         link = m.group(1)
