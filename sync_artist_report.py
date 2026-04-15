@@ -14,9 +14,11 @@ import argparse
 import re
 from dataclasses import dataclass
 import json
-from typing import Dict, List, Optional, Tuple
+import time
+from typing import Any, Callable, Dict, List, Optional, Tuple, TypeVar
 
 import gspread
+from gspread.exceptions import APIError
 from google.oauth2.service_account import Credentials
 
 
@@ -24,6 +26,34 @@ SCOPES = [
     "https://www.googleapis.com/auth/spreadsheets",
     "https://www.googleapis.com/auth/drive.readonly",
 ]
+
+T = TypeVar("T")
+
+
+def _is_rate_limited_error(exc: Exception) -> bool:
+    if not isinstance(exc, APIError):
+        return False
+    status_code = getattr(getattr(exc, "response", None), "status_code", None)
+    if status_code == 429:
+        return True
+    return "429" in str(exc)
+
+
+def with_backoff(fn: Callable[[], T], retries: int = 5, base_delay: float = 1.0) -> T:
+    """Retry Google API calls with exponential backoff on 429."""
+    delay = base_delay
+    last_exc: Optional[Exception] = None
+    for attempt in range(retries + 1):
+        try:
+            return fn()
+        except Exception as exc:  # noqa: BLE001
+            last_exc = exc
+            if not _is_rate_limited_error(exc) or attempt == retries:
+                raise
+            time.sleep(delay)
+            delay *= 2
+    assert last_exc is not None
+    raise last_exc
 
 
 def normalize(text: str) -> str:
@@ -107,7 +137,10 @@ class SourceRow:
 
 
 def get_source_data(ws: gspread.Worksheet, header_row: int) -> Dict[str, SourceRow]:
-    values = ws.get_all_values()
+    values = with_backoff(lambda: ws.get_all_values())
+    formula_values = with_backoff(
+        lambda: ws.get_all_values(value_render_option="FORMULA")
+    )
     if len(values) < header_row:
         raise ValueError("Header row is outside the sheet range.")
 
@@ -148,21 +181,28 @@ def get_source_data(ws: gspread.Worksheet, header_row: int) -> Dict[str, SourceR
             if "http://" in maybe_link or "https://" in maybe_link:
                 link = maybe_link
             else:
-                formula = ws.acell(
-                    gspread.utils.rowcol_to_a1(row_number, link_idx + 1),
-                    value_render_option="FORMULA",
-                ).value
+                formula_row = (
+                    formula_values[row_number - 1]
+                    if row_number - 1 < len(formula_values)
+                    else []
+                )
+                formula = (
+                    formula_row[link_idx]
+                    if link_idx < len(formula_row)
+                    else None
+                )
                 if isinstance(formula, str) and "HYPERLINK" in formula.upper():
                     m = re.search(r'"(https?://[^"]+)"', formula)
                     if m:
                         link = m.group(1)
         # Fallback: try finding a hyperlink formula in any cell of the row.
         if not link:
-            for col in range(1, len(row) + 1):
-                formula = ws.acell(
-                    gspread.utils.rowcol_to_a1(row_number, col),
-                    value_render_option="FORMULA",
-                ).value
+            formula_row = (
+                formula_values[row_number - 1]
+                if row_number - 1 < len(formula_values)
+                else []
+            )
+            for formula in formula_row:
                 if isinstance(formula, str) and "HYPERLINK" in formula.upper():
                     m = re.search(r'"(https?://[^"]+)"', formula)
                     if m:
@@ -186,14 +226,14 @@ def sync(
     source_header_row: int,
     target_header_row: int,
 ) -> Tuple[int, int]:
-    source = client.open_by_key(extract_sheet_id(source_url))
-    target = client.open_by_key(extract_sheet_id(target_url))
+    source = with_backoff(lambda: client.open_by_key(extract_sheet_id(source_url)))
+    target = with_backoff(lambda: client.open_by_key(extract_sheet_id(target_url)))
 
     source_ws = source.worksheet(source_sheet_name) if source_sheet_name else source.sheet1
     target_ws = target.worksheet(target_sheet_name) if target_sheet_name else target.sheet1
 
     source_map = get_source_data(source_ws, source_header_row)
-    target_values = target_ws.get_all_values()
+    target_values = with_backoff(lambda: target_ws.get_all_values())
     if len(target_values) < target_header_row:
         raise ValueError("Target header row is outside the sheet range.")
 
@@ -225,8 +265,16 @@ def sync(
             link_formula = f'=HYPERLINK("{source_row.link}","invoice")'
             updates.append((row_number, target_link_idx + 1, link_formula))
 
-    for row, col, value in updates:
-        target_ws.update_cell(row, col, value)
+    if updates:
+        payload: List[Dict[str, Any]] = []
+        for row, col, value in updates:
+            payload.append(
+                {
+                    "range": gspread.utils.rowcol_to_a1(row, col),
+                    "values": [[value]],
+                }
+            )
+        with_backoff(lambda: target_ws.batch_update(payload))
 
     return matched, len(updates)
 
