@@ -11,6 +11,7 @@ What it does:
 from __future__ import annotations
 
 import argparse
+import difflib
 import re
 from dataclasses import dataclass
 import json
@@ -66,6 +67,51 @@ def normalize(text: str) -> str:
     text = re.sub(r"\s+", " ", text)
     text = text.replace("ё", "е")
     return text
+
+
+def canonicalize(text: str) -> str:
+    """
+    Canonical form for fuzzy matching.
+    Helps with minor naming differences across templates.
+    """
+    text = normalize(text)
+    replacements = {
+        "advertisment": "advertisement",
+        "advertisments": "advertisements",
+        "tik tok": "tiktok",
+        "tik tok targeting": "tiktok targeting",
+        "mticket": "m ticket",
+        "ticket operator sevices": "ticket operator services",
+    }
+    for old, new in replacements.items():
+        text = text.replace(old, new)
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def best_match_key(target_key: str, source_keys: List[str], threshold: float = 0.72) -> Optional[str]:
+    """Find best fuzzy key match when exact match fails."""
+    if not target_key:
+        return None
+
+    target_canon = canonicalize(target_key)
+    best_key: Optional[str] = None
+    best_score = 0.0
+
+    for source_key in source_keys:
+        source_canon = canonicalize(source_key)
+        if not source_canon:
+            continue
+        score = difflib.SequenceMatcher(None, target_canon, source_canon).ratio()
+        # Small boost for partial containment.
+        if target_canon in source_canon or source_canon in target_canon:
+            score += 0.08
+        if score > best_score:
+            best_score = score
+            best_key = source_key
+
+    if best_key and best_score >= threshold:
+        return best_key
+    return None
 
 
 def parse_number(value: str) -> Optional[float]:
@@ -275,6 +321,7 @@ def sync(
 
     updates: List[Tuple[int, int, str]] = []
     matched = 0
+    source_keys = list(source_map.keys())
 
     for row_number, row in enumerate(target_values[target_header_row:], start=target_header_row + 1):
         if target_name_idx >= len(row):
@@ -285,6 +332,10 @@ def sync(
 
         key = normalize(target_name)
         source_row = source_map.get(key)
+        if not source_row:
+            fuzzy_key = best_match_key(key, source_keys)
+            if fuzzy_key:
+                source_row = source_map.get(fuzzy_key)
         if not source_row:
             continue
 
