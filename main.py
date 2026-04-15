@@ -37,7 +37,7 @@ def _run_sync(body: Dict[str, Any]):
         return None, _json_error("SERVICE_ACCOUNT_JSON is not set", 500)
 
     client = build_client_from_info(parse_service_account_json(service_account_json))
-    matched, updates = sync(
+    matched, updates, debug = sync(
         client=client,
         source_url=source_url,
         target_url=target_url,
@@ -57,6 +57,7 @@ def _run_sync(body: Dict[str, Any]):
         "updated_cells": updates,
         "target_open_url": target_open_url,
         "target_xlsx_url": target_xlsx_url,
+        "debug": debug,
     }, None
 
 

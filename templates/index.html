@@ -253,7 +253,11 @@
           }
 
           showResult(
-            `Готово!\nЗбіглося рядків: ${data.matched_rows}\nОновлено клітинок: ${data.updated_cells}`,
+            `Готово!\nЗбіглося рядків: ${data.matched_rows}\nОновлено клітинок: ${data.updated_cells}${
+              data.matched_rows === 0 && data.debug
+                ? `\n\nДіагностика:\nsource_rows_loaded: ${data.debug.source_rows_loaded}\ntarget_rows_total: ${data.debug.target_rows_total}\ndetected_target_header_row: ${data.debug.detected_target_header_row}\nname_col_idx: ${data.debug.target_name_column_index}\namount_col_idx: ${data.debug.target_amount_column_index}\nunmatched sample: ${(data.debug.unmatched_targets_sample || []).join(", ")}`
+                : ""
+            }`,
             false,
             {
               openUrl: data.target_open_url,

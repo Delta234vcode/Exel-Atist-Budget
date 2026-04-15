@@ -300,7 +300,7 @@ def sync(
     target_sheet_name: Optional[str],
     source_header_row: int,
     target_header_row: int,
-) -> Tuple[int, int]:
+) -> Tuple[int, int, Dict[str, Any]]:
     source = with_backoff(lambda: client.open_by_key(extract_sheet_id(source_url)))
     target = with_backoff(lambda: client.open_by_key(extract_sheet_id(target_url)))
 
@@ -309,7 +309,8 @@ def sync(
 
     source_map = get_source_data(source_ws, source_header_row)
     target_values = with_backoff(lambda: target_ws.get_all_values())
-    target_header_row = detect_header_row(target_values, target_header_row)
+    detected_target_header_row = detect_header_row(target_values, target_header_row)
+    target_header_row = detected_target_header_row
     if len(target_values) < target_header_row:
         raise ValueError("Target header row is outside the sheet range.")
 
@@ -322,6 +323,7 @@ def sync(
     updates: List[Tuple[int, int, str]] = []
     matched = 0
     source_keys = list(source_map.keys())
+    unmatched_targets: List[str] = []
 
     for row_number, row in enumerate(target_values[target_header_row:], start=target_header_row + 1):
         if target_name_idx >= len(row):
@@ -337,6 +339,8 @@ def sync(
             if fuzzy_key:
                 source_row = source_map.get(fuzzy_key)
         if not source_row:
+            if len(unmatched_targets) < 20:
+                unmatched_targets.append(target_name)
             continue
 
         matched += 1
@@ -357,7 +361,15 @@ def sync(
             )
         with_backoff(lambda: target_ws.batch_update(payload))
 
-    return matched, len(updates)
+    debug = {
+        "source_rows_loaded": len(source_map),
+        "target_rows_total": max(0, len(target_values) - target_header_row),
+        "detected_target_header_row": detected_target_header_row,
+        "target_name_column_index": target_name_idx,
+        "target_amount_column_index": target_amount_idx,
+        "unmatched_targets_sample": unmatched_targets,
+    }
+    return matched, len(updates), debug
 
 
 def build_client(service_account_path: str) -> gspread.Client:
@@ -388,7 +400,7 @@ def main() -> None:
     args = parser.parse_args()
 
     client = build_client(args.service_account)
-    matched, updates = sync(
+    matched, updates, debug = sync(
         client=client,
         source_url=args.source_url,
         target_url=args.target_url,
@@ -397,7 +409,7 @@ def main() -> None:
         source_header_row=args.source_header_row,
         target_header_row=args.target_header_row,
     )
-    print(f"Done. Matched rows: {matched}. Updated cells: {updates}.")
+    print(f"Done. Matched rows: {matched}. Updated cells: {updates}. Debug: {debug}")
 
 
 if __name__ == "__main__":
