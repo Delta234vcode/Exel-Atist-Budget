@@ -122,6 +122,32 @@ def discover_header_indexes(headers: List[str]) -> Dict[str, Optional[int]]:
     return result
 
 
+def has_amount_candidate(idx: Dict[str, Optional[int]]) -> bool:
+    for key in ["amount_fact", "amount_brutto", "amount_vat", "amount_sum", "amount_netto", "amount"]:
+        if idx.get(key) is not None:
+            return True
+    return False
+
+
+def detect_header_row(values: List[List[str]], preferred_row: int) -> int:
+    """
+    Detect the best header row if preferred row looks invalid.
+    Returns 1-indexed row number.
+    """
+    if values:
+        if 1 <= preferred_row <= len(values):
+            preferred_idx = discover_header_indexes(values[preferred_row - 1])
+            if preferred_idx.get("name") is not None and has_amount_candidate(preferred_idx):
+                return preferred_row
+
+    search_limit = min(len(values), 40)
+    for row_number in range(1, search_limit + 1):
+        idx = discover_header_indexes(values[row_number - 1])
+        if idx.get("name") is not None and has_amount_candidate(idx):
+            return row_number
+    return max(1, preferred_row)
+
+
 def extract_sheet_id(sheet_url: str) -> str:
     match = re.search(r"/spreadsheets/d/([a-zA-Z0-9-_]+)", sheet_url)
     if not match:
@@ -141,6 +167,9 @@ def get_source_data(ws: gspread.Worksheet, header_row: int) -> Dict[str, SourceR
     formula_values = with_backoff(
         lambda: ws.get_all_values(value_render_option="FORMULA")
     )
+    if not values:
+        raise ValueError("Source sheet is empty.")
+    header_row = detect_header_row(values, header_row)
     if len(values) < header_row:
         raise ValueError("Header row is outside the sheet range.")
 
@@ -234,6 +263,7 @@ def sync(
 
     source_map = get_source_data(source_ws, source_header_row)
     target_values = with_backoff(lambda: target_ws.get_all_values())
+    target_header_row = detect_header_row(target_values, target_header_row)
     if len(target_values) < target_header_row:
         raise ValueError("Target header row is outside the sheet range.")
 
