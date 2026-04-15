@@ -48,6 +48,10 @@ python sync_artist_report.py ^
 ## Деплой на Vercel (API)
 
 У репозиторій додано Python entrypoint `main.py` з endpoint `POST /api/sync`.
+Також додано веб-інтерфейс на головній сторінці `/`:
+- поле 1: загальна таблиця;
+- поле 2: таблиця артиста;
+- кнопка `Синхронізувати`.
 
 ### Environment Variables у Vercel
 
@@ -55,6 +59,14 @@ python sync_artist_report.py ^
 - `SYNC_TOKEN` — секретний токен для захисту endpoint.
 - `SOURCE_SHEET_URL` — (опційно) URL вашої таблиці за замовчуванням.
 - `TARGET_SHEET_URL` — (опційно) URL таблиці артиста за замовчуванням.
+
+### Робота через UI
+
+- Відкрий `https://YOUR-PROJECT.vercel.app/`
+- Встав 2 Google Sheets URL
+- Натисни `Синхронізувати`
+
+UI використовує `POST /sync-ui` (same-origin only). Для зовнішніх інтеграцій використовуй `POST /api/sync` з `Authorization: Bearer <SYNC_TOKEN>`.
 
 ### Виклик endpoint
 

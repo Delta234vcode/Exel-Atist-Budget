@@ -1,0 +1,222 @@
+<!doctype html>
+<html lang="uk">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Excel Artist Sync</title>
+    <style>
+      :root {
+        --excel-green: #107c41;
+        --excel-green-dark: #0b5b30;
+        --excel-green-soft: #e7f5ed;
+        --text: #1f2937;
+        --white: #ffffff;
+        --danger: #b42318;
+        --ok: #067647;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        font-family: "Segoe UI", Arial, sans-serif;
+        background: linear-gradient(135deg, #f0faf4 0%, #e3f3ea 100%);
+        color: var(--text);
+      }
+
+      .wrap {
+        min-height: 100vh;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 24px;
+      }
+
+      .card {
+        width: 100%;
+        max-width: 760px;
+        background: var(--white);
+        border-radius: 18px;
+        box-shadow: 0 20px 50px rgba(16, 124, 65, 0.12);
+        overflow: hidden;
+      }
+
+      .header {
+        padding: 20px 24px;
+        background: linear-gradient(90deg, var(--excel-green) 0%, #1a8f4f 100%);
+        color: var(--white);
+      }
+
+      .header h1 {
+        margin: 0;
+        font-size: 22px;
+        font-weight: 700;
+      }
+
+      .header p {
+        margin: 8px 0 0;
+        opacity: 0.9;
+      }
+
+      .content {
+        padding: 24px;
+      }
+
+      .field {
+        margin-bottom: 18px;
+      }
+
+      label {
+        display: block;
+        margin-bottom: 8px;
+        font-weight: 600;
+      }
+
+      input {
+        width: 100%;
+        border: 2px solid #d1e8d9;
+        border-radius: 12px;
+        padding: 12px 14px;
+        font-size: 15px;
+        outline: none;
+        transition: border-color 0.2s, box-shadow 0.2s;
+      }
+
+      input:focus {
+        border-color: var(--excel-green);
+        box-shadow: 0 0 0 3px rgba(16, 124, 65, 0.15);
+      }
+
+      .btn {
+        width: 100%;
+        border: 0;
+        border-radius: 12px;
+        padding: 14px 16px;
+        background: var(--excel-green);
+        color: var(--white);
+        font-size: 16px;
+        font-weight: 700;
+        cursor: pointer;
+        transition: background 0.2s;
+      }
+
+      .btn:hover {
+        background: var(--excel-green-dark);
+      }
+
+      .btn:disabled {
+        opacity: 0.7;
+        cursor: wait;
+      }
+
+      .result {
+        margin-top: 18px;
+        border-radius: 12px;
+        padding: 14px;
+        background: var(--excel-green-soft);
+        border: 1px solid #c7e7d3;
+        display: none;
+        white-space: pre-wrap;
+      }
+
+      .result.error {
+        background: #fdeceb;
+        border-color: #f5c2bf;
+        color: var(--danger);
+      }
+
+      .result.ok {
+        color: var(--ok);
+      }
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <div class="card">
+        <div class="header">
+          <h1>Excel Artist Budget Sync</h1>
+          <p>Встав 2 посилання та натисни кнопку. Бот перенесе бюджет і інвойси.</p>
+        </div>
+
+        <div class="content">
+          <div class="field">
+            <label for="sourceUrl">Посилання на загальну таблицю</label>
+            <input
+              id="sourceUrl"
+              type="url"
+              placeholder="https://docs.google.com/spreadsheets/d/..."
+              required
+            />
+          </div>
+
+          <div class="field">
+            <label for="targetUrl">Посилання на таблицю артиста</label>
+            <input
+              id="targetUrl"
+              type="url"
+              placeholder="https://docs.google.com/spreadsheets/d/..."
+              required
+            />
+          </div>
+
+          <button id="runBtn" class="btn">Синхронізувати</button>
+          <div id="result" class="result"></div>
+        </div>
+      </div>
+    </div>
+
+    <script>
+      const runBtn = document.getElementById("runBtn");
+      const resultBox = document.getElementById("result");
+      const sourceInput = document.getElementById("sourceUrl");
+      const targetInput = document.getElementById("targetUrl");
+
+      function showResult(text, isError = false) {
+        resultBox.style.display = "block";
+        resultBox.className = `result ${isError ? "error" : "ok"}`;
+        resultBox.textContent = text;
+      }
+
+      runBtn.addEventListener("click", async () => {
+        const source_url = sourceInput.value.trim();
+        const target_url = targetInput.value.trim();
+
+        if (!source_url || !target_url) {
+          showResult("Заповни обидва поля з посиланнями.", true);
+          return;
+        }
+
+        runBtn.disabled = true;
+        runBtn.textContent = "Синхронізую...";
+        resultBox.style.display = "none";
+
+        try {
+          const response = await fetch("/sync-ui", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              source_url,
+              target_url,
+            }),
+          });
+
+          const data = await response.json();
+          if (!response.ok || !data.ok) {
+            throw new Error(data.error || "Помилка синхронізації");
+          }
+
+          showResult(
+            `Готово!\nЗбіглося рядків: ${data.matched_rows}\nОновлено клітинок: ${data.updated_cells}`
+          );
+        } catch (err) {
+          showResult(`Помилка: ${err.message}`, true);
+        } finally {
+          runBtn.disabled = false;
+          runBtn.textContent = "Синхронізувати";
+        }
+      });
+    </script>
+  </body>
+</html>

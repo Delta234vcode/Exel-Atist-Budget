@@ -1,7 +1,7 @@
 import os
 from typing import Any, Dict
 
-from flask import Flask, jsonify, request
+from flask import Flask, jsonify, render_template, request
 
 from sync_artist_report import (
     build_client_from_info,
@@ -17,7 +17,49 @@ def _json_error(message: str, status: int):
     return jsonify({"ok": False, "error": message}), status
 
 
+def _run_sync(body: Dict[str, Any]):
+    source_url = body.get("source_url") or os.getenv("SOURCE_SHEET_URL")
+    target_url = body.get("target_url") or os.getenv("TARGET_SHEET_URL")
+    source_sheet_name = body.get("source_sheet_name")
+    target_sheet_name = body.get("target_sheet_name")
+    source_header_row = int(body.get("source_header_row", 9))
+    target_header_row = int(body.get("target_header_row", 9))
+
+    if not source_url or not target_url:
+        return None, _json_error(
+            "source_url and target_url are required (body or env vars)",
+            400,
+        )
+
+    service_account_json = os.getenv("SERVICE_ACCOUNT_JSON", "")
+    if not service_account_json:
+        return None, _json_error("SERVICE_ACCOUNT_JSON is not set", 500)
+
+    client = build_client_from_info(parse_service_account_json(service_account_json))
+    matched, updates = sync(
+        client=client,
+        source_url=source_url,
+        target_url=target_url,
+        source_sheet_name=source_sheet_name,
+        target_sheet_name=target_sheet_name,
+        source_header_row=source_header_row,
+        target_header_row=target_header_row,
+    )
+    return {"ok": True, "matched_rows": matched, "updated_cells": updates}, None
+
+
+def _is_same_origin() -> bool:
+    origin = request.headers.get("Origin", "").rstrip("/")
+    host_url = request.host_url.rstrip("/")
+    return bool(origin and origin == host_url)
+
+
 @app.get("/")
+def home():
+    return render_template("index.html")
+
+
+@app.get("/health")
 def health():
     return jsonify({"ok": True, "message": "Service is running"})
 
@@ -40,35 +82,24 @@ def sync_post():
                 return _json_error("Invalid token", 403)
 
         body: Dict[str, Any] = request.get_json(silent=True) or {}
+        result, error_response = _run_sync(body)
+        if error_response:
+            return error_response
+        return jsonify(result)
+    except Exception as exc:
+        return _json_error(str(exc), 500)
 
-        source_url = body.get("source_url") or os.getenv("SOURCE_SHEET_URL")
-        target_url = body.get("target_url") or os.getenv("TARGET_SHEET_URL")
-        source_sheet_name = body.get("source_sheet_name")
-        target_sheet_name = body.get("target_sheet_name")
-        source_header_row = int(body.get("source_header_row", 9))
-        target_header_row = int(body.get("target_header_row", 9))
 
-        if not source_url or not target_url:
-            return _json_error(
-                "source_url and target_url are required (body or env vars)",
-                400,
-            )
+@app.post("/sync-ui")
+def sync_ui_post():
+    try:
+        if not _is_same_origin():
+            return _json_error("UI endpoint is same-origin only", 403)
 
-        service_account_json = os.getenv("SERVICE_ACCOUNT_JSON", "")
-        if not service_account_json:
-            return _json_error("SERVICE_ACCOUNT_JSON is not set", 500)
-
-        client = build_client_from_info(parse_service_account_json(service_account_json))
-        matched, updates = sync(
-            client=client,
-            source_url=source_url,
-            target_url=target_url,
-            source_sheet_name=source_sheet_name,
-            target_sheet_name=target_sheet_name,
-            source_header_row=source_header_row,
-            target_header_row=target_header_row,
-        )
-
-        return jsonify({"ok": True, "matched_rows": matched, "updated_cells": updates})
+        body: Dict[str, Any] = request.get_json(silent=True) or {}
+        result, error_response = _run_sync(body)
+        if error_response:
+            return error_response
+        return jsonify(result)
     except Exception as exc:
         return _json_error(str(exc), 500)
