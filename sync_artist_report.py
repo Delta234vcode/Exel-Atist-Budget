@@ -31,6 +31,26 @@ SCOPES = [
 
 T = TypeVar("T")
 
+CATEGORY_HEADERS = {
+    "fee",
+    "advertisment",
+    "advertisement",
+    "accomodation",
+    "accommodation",
+    "transport",
+    "food",
+    "dressing room",
+    "venue place",
+    "services",
+    "security",
+    "staff",
+    "ticketing service docs",
+    "ticketing service",
+    "vat tax",
+    "techrider",
+    "other costs",
+}
+
 
 def _is_rate_limited_error(exc: Exception) -> bool:
     if not isinstance(exc, APIError):
@@ -87,6 +107,10 @@ def canonicalize(text: str) -> str:
     for old, new in replacements.items():
         text = text.replace(old, new)
     return re.sub(r"\s+", " ", text).strip()
+
+
+def is_category_header(text: str) -> bool:
+    return canonicalize(text) in CATEGORY_HEADERS
 
 
 def best_match_key(target_key: str, source_keys: List[str], threshold: float = 0.72) -> Optional[str]:
@@ -410,6 +434,7 @@ def sync(
     target_sheet_name: Optional[str],
     source_header_row: int,
     target_header_row: int,
+    category_filter: Optional[str] = None,
 ) -> Tuple[int, int, Dict[str, Any]]:
     source = with_backoff(lambda: client.open_by_key(extract_sheet_id(source_url)))
     target = with_backoff(lambda: client.open_by_key(extract_sheet_id(target_url)))
@@ -439,12 +464,25 @@ def sync(
     matched = 0
     source_keys = list(source_map.keys())
     unmatched_targets: List[str] = []
+    category_filter_norm = canonicalize(category_filter or "")
+    active_target_category = ""
+    category_total = 0.0
+    category_header_row: Optional[int] = None
 
     for row_number, row in enumerate(target_values[target_header_row:], start=target_header_row + 1):
         if target_name_idx >= len(row):
             continue
         target_name = row[target_name_idx].strip()
         if not target_name:
+            continue
+
+        target_name_norm = canonicalize(target_name)
+        if is_category_header(target_name):
+            active_target_category = target_name_norm
+            if category_filter_norm and active_target_category == category_filter_norm:
+                category_header_row = row_number
+
+        if category_filter_norm and active_target_category != category_filter_norm:
             continue
 
         key = normalize(target_name)
@@ -460,10 +498,14 @@ def sync(
 
         matched += 1
         updates.append((row_number, target_amount_idx + 1, format_amount_for_sheet(source_row.amount or 0)))
+        category_total += source_row.amount or 0.0
 
         if source_row.link and target_link_idx is not None:
             link_formula = f'=HYPERLINK("{source_row.link}","invoice")'
             updates.append((row_number, target_link_idx + 1, link_formula))
+
+    if category_filter_norm and category_header_row is not None:
+        updates.append((category_header_row, target_amount_idx + 1, format_amount_for_sheet(category_total)))
 
     if updates:
         payload: List[Dict[str, Any]] = []
@@ -480,6 +522,7 @@ def sync(
         "source_rows_loaded": len(source_map),
         "detected_source_header_row": detected_source_header_row,
         "source_keys_sample": list(source_map.keys())[:20],
+        "category_filter": category_filter,
         "target_rows_total": max(0, len(target_values) - target_header_row),
         "detected_target_header_row": detected_target_header_row,
         "target_name_column_index": target_name_idx,

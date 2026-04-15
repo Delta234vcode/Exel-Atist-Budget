@@ -26,6 +26,7 @@ def _run_sync(body: Dict[str, Any]):
     new_target_created = False
     source_sheet_name = body.get("source_sheet_name")
     target_sheet_name = body.get("target_sheet_name")
+    category_filter = body.get("category_filter")
     source_header_row = int(body.get("source_header_row", 15))
     target_header_row = int(body.get("target_header_row", 9))
 
@@ -54,6 +55,7 @@ def _run_sync(body: Dict[str, Any]):
         target_sheet_name=target_sheet_name,
         source_header_row=source_header_row,
         target_header_row=target_header_row,
+        category_filter=category_filter,
     )
     target_sheet_id = extract_sheet_id(target_url)
     target_open_url = f"https://docs.google.com/spreadsheets/d/{target_sheet_id}/edit"

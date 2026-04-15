@@ -178,6 +178,15 @@
             />
           </div>
 
+          <div class="field">
+            <label for="categoryFilter">Категорія (опційно, напр. Transport)</label>
+            <input
+              id="categoryFilter"
+              type="text"
+              placeholder="Transport"
+            />
+          </div>
+
           <button id="runBtn" class="btn">Синхронізувати</button>
           <div id="result" class="result"></div>
         </div>
@@ -189,6 +198,7 @@
       const resultBox = document.getElementById("result");
       const sourceInput = document.getElementById("sourceUrl");
       const targetInput = document.getElementById("targetUrl");
+      const categoryInput = document.getElementById("categoryFilter");
 
       function showResult(text, isError = false, links = null) {
         resultBox.style.display = "block";
@@ -226,6 +236,7 @@
       runBtn.addEventListener("click", async () => {
         const source_url = sourceInput.value.trim();
         const target_url = targetInput.value.trim();
+        const category_filter = categoryInput.value.trim();
 
         if (!source_url) {
           showResult("Заповни посилання на загальну таблицю.", true);
@@ -244,6 +255,7 @@
               source_url,
               target_url,
               auto_create_target: true,
+              category_filter,
             }),
           });
 
