@@ -1,0 +1,13 @@
+{
+  "functions": {
+    "api/sync.py": {
+      "runtime": "python3.11"
+    }
+  },
+  "routes": [
+    {
+      "src": "/api/sync",
+      "dest": "/api/sync.py"
+    }
+  ]
+}
