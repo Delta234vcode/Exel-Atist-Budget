@@ -138,34 +138,6 @@
         flex-wrap: wrap;
       }
 
-      .city-tools {
-        display: flex;
-        gap: 10px;
-        margin-bottom: 10px;
-      }
-
-      .city-list {
-        display: flex;
-        flex-wrap: wrap;
-        gap: 8px;
-      }
-
-      .city-chip {
-        border: 1px solid #b6dec6;
-        border-radius: 999px;
-        padding: 6px 12px;
-        background: #f3fcf7;
-        color: #0a5b2f;
-        cursor: pointer;
-        font-size: 14px;
-      }
-
-      .city-chip.active {
-        background: #107c41;
-        color: #fff;
-        border-color: #107c41;
-      }
-
       .link-btn {
         display: inline-block;
         text-decoration: none;
@@ -183,7 +155,7 @@
       <div class="card">
         <div class="header">
           <h1>Excel Artist Budget Sync</h1>
-          <p>Встав посилання на Google Sheet. Дані з вибраних міст підставляються у локальний шаблон <code>template.xlsx</code> і завантажуються як один .xlsx файл.</p>
+          <p>Встав загальну таблицю. Таблиця артиста опційна: якщо порожня — створимо автоматично.</p>
         </div>
 
         <div class="content">
@@ -198,15 +170,24 @@
           </div>
 
           <div class="field">
-            <label>Міста (аркуші)</label>
-            <div class="city-tools">
-              <button id="loadCitiesBtn" class="link-btn" type="button">Завантажити міста</button>
-              <button id="toggleAllCitiesBtn" class="link-btn" type="button">Вибрати всі</button>
-            </div>
-            <div id="cityList" class="city-list"></div>
+            <label for="targetUrl">Посилання на таблицю артиста</label>
+            <input
+              id="targetUrl"
+              type="url"
+              placeholder="(опційно) https://docs.google.com/spreadsheets/d/..."
+            />
           </div>
 
-          <button id="runBtn" class="btn">Згенерувати спрощені аркуші</button>
+          <div class="field">
+            <label for="categoryFilter">Категорія (опційно, напр. Transport)</label>
+            <input
+              id="categoryFilter"
+              type="text"
+              placeholder="Transport"
+            />
+          </div>
+
+          <button id="runBtn" class="btn">Синхронізувати</button>
           <div id="result" class="result"></div>
         </div>
       </div>
@@ -216,93 +197,46 @@
       const runBtn = document.getElementById("runBtn");
       const resultBox = document.getElementById("result");
       const sourceInput = document.getElementById("sourceUrl");
-      const loadCitiesBtn = document.getElementById("loadCitiesBtn");
-      const toggleAllCitiesBtn = document.getElementById("toggleAllCitiesBtn");
-      const cityList = document.getElementById("cityList");
-      const selectedCities = new Set();
-      let citiesLoaded = [];
+      const targetInput = document.getElementById("targetUrl");
+      const categoryInput = document.getElementById("categoryFilter");
 
-      function showResult(text, isError = false) {
+      function showResult(text, isError = false, links = null) {
         resultBox.style.display = "block";
         resultBox.className = `result ${isError ? "error" : "ok"}`;
         resultBox.textContent = text;
+
+        if (links && !isError) {
+          const linksWrap = document.createElement("div");
+          linksWrap.className = "links";
+
+          if (links.openUrl) {
+            const openLink = document.createElement("a");
+            openLink.className = "link-btn";
+            openLink.href = links.openUrl;
+            openLink.target = "_blank";
+            openLink.rel = "noopener noreferrer";
+            openLink.textContent = "Відкрити оновлену таблицю";
+            linksWrap.appendChild(openLink);
+          }
+
+          if (links.xlsxUrl) {
+            const xlsxLink = document.createElement("a");
+            xlsxLink.className = "link-btn";
+            xlsxLink.href = links.xlsxUrl;
+            xlsxLink.target = "_blank";
+            xlsxLink.rel = "noopener noreferrer";
+            xlsxLink.textContent = "Скачати XLSX файл";
+            linksWrap.appendChild(xlsxLink);
+          }
+
+          resultBox.appendChild(linksWrap);
+        }
       }
-
-      function renderCityButtons() {
-        cityList.innerHTML = "";
-        citiesLoaded.forEach((city) => {
-          const btn = document.createElement("button");
-          btn.type = "button";
-          btn.className = `city-chip ${selectedCities.has(city) ? "active" : ""}`;
-          btn.textContent = city;
-          btn.addEventListener("click", () => {
-            if (selectedCities.has(city)) {
-              selectedCities.delete(city);
-            } else {
-              selectedCities.add(city);
-            }
-            renderCityButtons();
-          });
-          cityList.appendChild(btn);
-        });
-      }
-
-      async function loadCities() {
-        const source_url = sourceInput.value.trim();
-        if (!source_url) {
-          showResult("Спочатку встав посилання на загальну таблицю.", true);
-          return;
-        }
-
-        const response = await fetch("/cities-ui", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ source_url }),
-        });
-        const data = await response.json();
-        if (!response.ok || !data.ok) {
-          throw new Error(data.error || "Не вдалося завантажити міста");
-        }
-
-        citiesLoaded = data.cities || [];
-        selectedCities.clear();
-        renderCityButtons();
-      }
-
-      loadCitiesBtn.addEventListener("click", async () => {
-        try {
-          await loadCities();
-          showResult(`Завантажено міст: ${citiesLoaded.length}`, false);
-        } catch (err) {
-          showResult(`Помилка: ${err.message}`, true);
-        }
-      });
-
-      toggleAllCitiesBtn.addEventListener("click", () => {
-        if (!citiesLoaded.length) {
-          return;
-        }
-        if (selectedCities.size === citiesLoaded.length) {
-          selectedCities.clear();
-          toggleAllCitiesBtn.textContent = "Вибрати всі";
-        } else {
-          citiesLoaded.forEach((city) => selectedCities.add(city));
-          toggleAllCitiesBtn.textContent = "Зняти всі";
-        }
-        renderCityButtons();
-      });
-
-      sourceInput.addEventListener("change", async () => {
-        try {
-          await loadCities();
-        } catch (err) {
-          showResult(`Помилка: ${err.message}`, true);
-        }
-      });
 
       runBtn.addEventListener("click", async () => {
         const source_url = sourceInput.value.trim();
-        const selected_cities = Array.from(selectedCities);
+        const target_url = targetInput.value.trim();
+        const category_filter = categoryInput.value.trim();
 
         if (!source_url) {
           showResult("Заповни посилання на загальну таблицю.", true);
@@ -310,7 +244,7 @@
         }
 
         runBtn.disabled = true;
-        runBtn.textContent = "Готую файл...";
+        runBtn.textContent = "Синхронізую...";
         resultBox.style.display = "none";
 
         try {
@@ -319,47 +253,38 @@
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
               source_url,
-              selected_cities,
+              target_url,
+              auto_create_target: true,
+              category_filter,
             }),
           });
 
-          const ct = response.headers.get("Content-Type") || "";
-          if (!response.ok) {
-            const errBody = await response.json().catch(() => ({}));
-            throw new Error(errBody.error || response.statusText);
-          }
-          if (ct.includes("application/json")) {
-            const data = await response.json();
-            throw new Error(data.error || "Неочікувана відповідь сервера");
+          const data = await response.json();
+          if (!response.ok || !data.ok) {
+            throw new Error(data.error || "Помилка синхронізації");
           }
 
-          const blob = await response.blob();
-          let fname = "artist_report.xlsx";
-          const cd = response.headers.get("Content-Disposition");
-          if (cd) {
-            const m = cd.match(/filename="([^"]+)"/i);
-            if (m) fname = m[1];
-          }
-          const url = URL.createObjectURL(blob);
-          const a = document.createElement("a");
-          a.href = url;
-          a.download = fname;
-          a.rel = "noopener";
-          document.body.appendChild(a);
-          a.click();
-          a.remove();
-          URL.revokeObjectURL(url);
-
-          const cityNote =
-            selected_cities.length > 0
-              ? `${selected_cities.length} обраних`
-              : `${citiesLoaded.length} (усі зі списку)`;
-          showResult(`Готово!\nФайл завантажено: ${fname}\nМіст у файлі: ${cityNote}`, false);
+          showResult(
+            `Готово!\nЗбіглося рядків: ${data.matched_rows}\nОновлено клітинок: ${data.updated_cells}${
+              data.new_target_created
+                ? "\nСтворено нову таблицю артиста як копію оригіналу."
+                : ""
+            }${
+              data.matched_rows === 0 && data.debug
+                ? `\n\nДіагностика:\nsource_rows_loaded: ${data.debug.source_rows_loaded}\ndetected_source_header_row: ${data.debug.detected_source_header_row}\nsource_keys_sample: ${(data.debug.source_keys_sample || []).join(", ")}\ntarget_rows_total: ${data.debug.target_rows_total}\ndetected_target_header_row: ${data.debug.detected_target_header_row}\nname_col_idx: ${data.debug.target_name_column_index}\namount_col_idx: ${data.debug.target_amount_column_index}\nunmatched sample: ${(data.debug.unmatched_targets_sample || []).join(", ")}`
+                : ""
+            }`,
+            false,
+            {
+              openUrl: data.target_open_url,
+              xlsxUrl: data.target_xlsx_url,
+            }
+          );
         } catch (err) {
           showResult(`Помилка: ${err.message}`, true);
         } finally {
           runBtn.disabled = false;
-          runBtn.textContent = "Згенерувати спрощені аркуші";
+          runBtn.textContent = "Синхронізувати";
         }
       });
     </script>

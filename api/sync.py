@@ -1,13 +1,11 @@
-import base64
 import json
 import os
 from http.server import BaseHTTPRequestHandler
 
 from sync_artist_report import (
     build_client_from_info,
-    build_simplified_city_xlsx,
-    list_city_sheets,
     parse_service_account_json,
+    sync,
 )
 
 
@@ -42,16 +40,20 @@ class handler(BaseHTTPRequestHandler):
             body = json.loads(raw_body.decode("utf-8"))
 
             source_url = body.get("source_url") or os.getenv("SOURCE_SHEET_URL")
-            selected_cities = body.get("selected_cities") or []
-            list_only = bool(body.get("list_cities_only", False))
+            target_url = body.get("target_url") or os.getenv("TARGET_SHEET_URL")
+            source_sheet_name = body.get("source_sheet_name")
+            target_sheet_name = body.get("target_sheet_name")
+            category_filter = body.get("category_filter")
+            source_header_row = int(body.get("source_header_row", 15))
+            target_header_row = int(body.get("target_header_row", 9))
 
-            if not source_url:
+            if not source_url or not target_url:
                 _json_response(
                     self,
                     400,
                     {
                         "ok": False,
-                        "error": "source_url is required (body or env vars)",
+                        "error": "source_url and target_url are required (body or env vars)",
                     },
                 )
                 return
@@ -62,15 +64,15 @@ class handler(BaseHTTPRequestHandler):
                 return
 
             client = build_client_from_info(parse_service_account_json(service_account_json))
-            if list_only:
-                cities = list_city_sheets(client, source_url)
-                _json_response(self, 200, {"ok": True, "cities": cities})
-                return
-
-            xlsx_bytes, filename, debug = build_simplified_city_xlsx(
+            matched, updates_count, debug = sync(
                 client=client,
                 source_url=source_url,
-                selected_cities=selected_cities,
+                target_url=target_url,
+                source_sheet_name=source_sheet_name,
+                target_sheet_name=target_sheet_name,
+                source_header_row=source_header_row,
+                target_header_row=target_header_row,
+                category_filter=category_filter,
             )
 
             _json_response(
@@ -78,9 +80,8 @@ class handler(BaseHTTPRequestHandler):
                 200,
                 {
                     "ok": True,
-                    "selected_city_count": len(debug.get("selected_cities", [])),
-                    "filename": filename,
-                    "xlsx_base64": base64.standard_b64encode(xlsx_bytes).decode("ascii"),
+                    "matched_rows": matched,
+                    "updated_cells": updates_count,
                     "debug": debug,
                 },
             )

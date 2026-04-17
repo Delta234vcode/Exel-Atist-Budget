@@ -1,8 +1,10 @@
-# Генератор спрощених Artist Report (.xlsx)
+# Автозаповнення Artist Report
 
-Сервіс читає вашу **Google Sheet** (з кількома містами — окремі аркуші), підставляє спрощені дані у локальний Excel-шаблон **`template.xlsx`** у репозиторії та повертає **один .xlsx** з окремим аркушем на кожне обране місто.
+Скрипт переносить:
+- фактичну суму (`FACT / FACT EUR`) з вашої таблиці;
+- посилання на інвойс (як `HYPERLINK`) у таблицю артиста.
 
-Форматування (кольори, шрифти, ширина колонок) береться з аркуша **`Template`** у `template.xlsx` (якщо такого аркуша немає — використовується перший аркуш).
+Зіставлення йде за назвою рядка витрати (наприклад `hotel band and artist`).
 
 ## 1) Встановлення
 
@@ -15,54 +17,64 @@ pip install -r requirements.txt
 ## 2) Доступ до Google Sheets
 
 1. Створіть **Service Account** у Google Cloud.
-2. Увімкніть **Google Sheets API**.
+2. Увімкніть Google Sheets API.
 3. Завантажте JSON ключ, наприклад `service-account.json`.
-4. Додайте email цього Service Account у **Share** вашої **вихідної** таблиці (як Editor).
+4. Додайте email цього Service Account у `Share` обох таблиць (як Editor).
 
-Окремий **Google Drive API** для цього сценарію не потрібен: новий Google-файл не створюється, лише читається source.
-
-## 3) Шаблон `template.xlsx`
-
-- Файл лежить у корені репозиторію поруч із кодом.
-- Замініть його на свій дизайн; залиште аркуш з назвою **`Template`** (рекомендовано).
-- Для кожного міста сервіс **копіює** цей аркуш, очищає клітинки і записує до **5 колонок** даних (як у спрощеній логіці).
-
-Шлях до шаблону можна перевизначити змінною середовища **`TEMPLATE_XLSX_PATH`** (абсолютний шлях до .xlsx).
-
-## 4) Запуск
+## 3) Запуск
 
 ```bash
-python main.py
+python sync_artist_report.py ^
+  --service-account "C:\path\to\service-account.json" ^
+  --source-url "https://docs.google.com/spreadsheets/d/170iP6rlKZFqL7qho9okUbL9i4AT-vwkAh4bQXCNN8Vg/edit?usp=sharing" ^
+  --target-url "https://docs.google.com/spreadsheets/d/1VMwwk7fzsCWMo6XOQQWQdXkMbJ4r0g9StR5-FCnanz8/edit?usp=sharing"
 ```
 
-## 5) Деплой на Vercel (API)
+## Корисні параметри
 
-У репозиторій додано Python entrypoint `main.py` з endpoint:
+- `--source-sheet-name "Tab name"`: якщо треба не перший лист.
+- `--target-sheet-name "Tab name"`: якщо треба не перший лист.
+- `--source-header-row 15`: рядок із заголовками у вашій таблиці (для блоку Plan costs).
+- `--target-header-row 9`: рядок із заголовками у таблиці артиста.
 
-- `POST /cities-ui` — повертає список міст (назви аркушів);
-- `POST /sync-ui` — same-origin, повертає **файл .xlsx** (завантаження в браузері);
-- `POST /api/sync` — JSON з полями `filename`, `xlsx_base64`, `debug` (для великих файлів зверніть увагу на ліміти розміру відповіді).
+## Як працює зіставлення
 
-Також веб-інтерфейс на головній сторінці `/`:
+- Нормалізує текст (нижній регістр, прибирає зайві пробіли).
+- Шукає в source рядок із такою ж назвою, як у target.
+- Якщо знайдено:
+  - оновлює суму;
+  - вставляє `HYPERLINK` на інвойс, якщо в source знайдений URL.
 
-- поле: посилання на загальну Google Sheet;
-- завантажити міста → вибір (або «всі»);
-- кнопка генерації → завантаження `.xlsx`.
+## Деплой на Vercel (API)
+
+У репозиторій додано Python entrypoint `main.py` з endpoint `POST /api/sync`.
+Також додано веб-інтерфейс на головній сторінці `/`:
+- поле 1: загальна таблиця;
+- поле 2: таблиця артиста;
+- кнопка `Синхронізувати`.
 
 ### Environment Variables у Vercel
 
 - `SERVICE_ACCOUNT_JSON` — повний JSON ключ сервісного акаунта одним рядком.
 - `SYNC_TOKEN` — секретний токен для захисту endpoint.
 - `SOURCE_SHEET_URL` — (опційно) URL вашої таблиці за замовчуванням.
-- `TEMPLATE_XLSX_PATH` — (опційно) шлях до кастомного шаблону на сервері.
+- `TARGET_SHEET_URL` — (опційно) URL таблиці артиста за замовчуванням.
 
-### Виклик API
+### Робота через UI
+
+- Відкрий `https://YOUR-PROJECT.vercel.app/`
+- Встав 2 Google Sheets URL
+- Натисни `Синхронізувати`
+
+UI використовує `POST /sync-ui` (same-origin only). Для зовнішніх інтеграцій використовуй `POST /api/sync` з `Authorization: Bearer <SYNC_TOKEN>`.
+
+### Виклик endpoint
 
 ```bash
 curl -X POST "https://YOUR-PROJECT.vercel.app/api/sync" ^
   -H "Authorization: Bearer YOUR_SYNC_TOKEN" ^
   -H "Content-Type: application/json" ^
-  -d "{\"source_url\":\"https://docs.google.com/spreadsheets/d/YOUR_ID/edit\",\"selected_cities\":[\"Berlin\"]}"
+  -d "{\"source_url\":\"https://docs.google.com/spreadsheets/d/170iP6rlKZFqL7qho9okUbL9i4AT-vwkAh4bQXCNN8Vg/edit?usp=sharing\",\"target_url\":\"https://docs.google.com/spreadsheets/d/1VMwwk7fzsCWMo6XOQQWQdXkMbJ4r0g9StR5-FCnanz8/edit?usp=sharing\"}"
 ```
 
-Якщо `SOURCE_SHEET_URL` заданий в env, `source_url` у body можна не передавати.
+Якщо `SOURCE_SHEET_URL` і `TARGET_SHEET_URL` задані в env, body можна не передавати.
