@@ -1,10 +1,9 @@
-# Автозаповнення Artist Report
+# Генератор спрощених Artist Report аркушів
 
-Скрипт переносить:
-- фактичну суму (`FACT / FACT EUR`) з вашої таблиці;
-- посилання на інвойс (як `HYPERLINK`) у таблицю артиста.
+Сервіс бере велику таблицю (де може бути багато міст), залишає тільки потрібні міста
+та видаляє зайві рядки/стовпчики, щоб вийшов спрощений формат.
 
-Зіставлення йде за назвою рядка витрати (наприклад `hotel band and artist`).
+Результат: нова Google Sheet із окремими аркушами по вибраних містах.
 
 ## 1) Встановлення
 
@@ -24,10 +23,7 @@ pip install -r requirements.txt
 ## 3) Запуск
 
 ```bash
-python sync_artist_report.py ^
-  --service-account "C:\path\to\service-account.json" ^
-  --source-url "https://docs.google.com/spreadsheets/d/170iP6rlKZFqL7qho9okUbL9i4AT-vwkAh4bQXCNN8Vg/edit?usp=sharing" ^
-  --target-url "https://docs.google.com/spreadsheets/d/1VMwwk7fzsCWMo6XOQQWQdXkMbJ4r0g9StR5-FCnanz8/edit?usp=sharing"
+python main.py
 ```
 
 ## Корисні параметри
@@ -37,34 +33,32 @@ python sync_artist_report.py ^
 - `--source-header-row 15`: рядок із заголовками у вашій таблиці (для блоку Plan costs).
 - `--target-header-row 9`: рядок із заголовками у таблиці артиста.
 
-## Як працює зіставлення
-
-- Нормалізує текст (нижній регістр, прибирає зайві пробіли).
-- Шукає в source рядок із такою ж назвою, як у target.
-- Якщо знайдено:
-  - оновлює суму;
-  - вставляє `HYPERLINK` на інвойс, якщо в source знайдений URL.
-
 ## Деплой на Vercel (API)
 
-У репозиторій додано Python entrypoint `main.py` з endpoint `POST /api/sync`.
+У репозиторій додано Python entrypoint `main.py` з endpoint:
+- `POST /cities-ui` — повертає список міст (назви аркушів);
+- `POST /sync-ui` або `POST /api/sync` — створює спрощену таблицю.
+
 Також додано веб-інтерфейс на головній сторінці `/`:
 - поле 1: загальна таблиця;
-- поле 2: таблиця артиста;
-- кнопка `Синхронізувати`.
+- кнопка завантажити міста;
+- вибір міст (або всі);
+- кнопка генерації.
 
 ### Environment Variables у Vercel
 
 - `SERVICE_ACCOUNT_JSON` — повний JSON ключ сервісного акаунта одним рядком.
 - `SYNC_TOKEN` — секретний токен для захисту endpoint.
 - `SOURCE_SHEET_URL` — (опційно) URL вашої таблиці за замовчуванням.
-- `TARGET_SHEET_URL` — (опційно) URL таблиці артиста за замовчуванням.
+- `TARGET_SHEET_URL` — не обов'язкова (створюється нова таблиця з копії source).
 
 ### Робота через UI
 
 - Відкрий `https://YOUR-PROJECT.vercel.app/`
-- Встав 2 Google Sheets URL
-- Натисни `Синхронізувати`
+- Встав URL загальної таблиці
+- Натисни `Завантажити міста`
+- Вибери потрібні міста або `Вибрати всі`
+- Натисни `Згенерувати спрощені аркуші`
 
 UI використовує `POST /sync-ui` (same-origin only). Для зовнішніх інтеграцій використовуй `POST /api/sync` з `Authorization: Bearer <SYNC_TOKEN>`.
 

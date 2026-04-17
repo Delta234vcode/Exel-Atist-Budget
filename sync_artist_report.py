@@ -51,6 +51,65 @@ CATEGORY_HEADERS = {
     "other costs",
 }
 
+SIMPLIFIED_COLUMNS_TO_KEEP = 5
+
+SIMPLIFIED_ALLOWED_ROWS = {
+    "city",
+    "data",
+    "venue",
+    "artist",
+    "selling total",
+    "fee",
+    "artist fee band",
+    "advertisement",
+    "advertisment",
+    "meta targeting",
+    "tik tok targeting",
+    "tiktok targeting",
+    "mticket targeting",
+    "accommodation",
+    "accomodation",
+    "hotel band and artist",
+    "hotel fca",
+    "hotel",
+    "transport",
+    "artist transport",
+    "fca",
+    "food",
+    "band and artist",
+    "band",
+    "dressing room",
+    "catering",
+    "venue place",
+    "venue rent",
+    "services",
+    "other costs",
+    "security",
+    "staff",
+    "marketing",
+    "targeting",
+    "technical director",
+    "tour managers 2 people",
+    "ticketing service docs",
+    "ticket operator services",
+    "vat tax",
+    "vat 7",
+    "techrider",
+    "feyeria",
+    "band stuf",
+    "unexpected expenses",
+    "бейджи",
+    "таблички",
+    "доставка",
+    "author society service",
+    "other",
+    "total",
+    "result",
+    "balance",
+    "profit artist 80",
+    "profit fca 20",
+}
+
 
 def _is_rate_limited_error(exc: Exception) -> bool:
     if not isinstance(exc, APIError):
@@ -330,6 +389,88 @@ def create_artist_sheet_from_source(
         raise ValueError("Could not get new spreadsheet id after copy.")
 
     return f"https://docs.google.com/spreadsheets/d/{new_id}/edit"
+
+
+def list_city_sheets(client: gspread.Client, source_url: str) -> List[str]:
+    spreadsheet = with_backoff(lambda: client.open_by_key(extract_sheet_id(source_url)))
+    result: List[str] = []
+    for ws in spreadsheet.worksheets():
+        if is_city_sheet(ws):
+            result.append(ws.title)
+    return result
+
+
+def is_city_sheet(ws: gspread.Worksheet) -> bool:
+    preview = with_backoff(lambda: ws.get("A1:A8"))
+    flattened = [normalize(row[0]) for row in preview if row]
+    return "city" in flattened and "artist" in flattened
+
+
+def _is_allowed_city_row(row_index: int, row: List[str]) -> bool:
+    if row_index <= 7:
+        return True
+    title = canonicalize(row[0] if row else "")
+    return title in SIMPLIFIED_ALLOWED_ROWS
+
+
+def simplify_city_sheet(ws: gspread.Worksheet) -> Dict[str, int]:
+    values = with_backoff(lambda: ws.get_all_values())
+    rows_deleted = 0
+    if values:
+        rows_to_delete: List[int] = []
+        for idx, row in enumerate(values, start=1):
+            if not _is_allowed_city_row(idx, row):
+                rows_to_delete.append(idx)
+
+        for row_idx in sorted(rows_to_delete, reverse=True):
+            with_backoff(lambda row_idx=row_idx: ws.delete_rows(row_idx))
+            rows_deleted += 1
+
+    col_deleted = 0
+    values_after = with_backoff(lambda: ws.get_all_values())
+    max_cols = max((len(r) for r in values_after), default=0)
+    if max_cols > SIMPLIFIED_COLUMNS_TO_KEEP:
+        with_backoff(
+            lambda: ws.delete_columns(SIMPLIFIED_COLUMNS_TO_KEEP + 1, max_cols)
+        )
+        col_deleted = max_cols - SIMPLIFIED_COLUMNS_TO_KEEP
+
+    return {"rows_deleted": rows_deleted, "columns_deleted": col_deleted}
+
+
+def build_simplified_city_book(
+    client: gspread.Client,
+    source_url: str,
+    selected_cities: Optional[List[str]] = None,
+) -> Tuple[str, Dict[str, Any]]:
+    source = with_backoff(lambda: client.open_by_key(extract_sheet_id(source_url)))
+    selected_set = {c.strip() for c in (selected_cities or []) if c and c.strip()}
+    all_cities = [ws.title for ws in source.worksheets() if is_city_sheet(ws)]
+    cities_for_export = [title for title in all_cities if not selected_set or title in selected_set]
+
+    if not cities_for_export:
+        raise ValueError("No valid city sheets selected.")
+
+    target_url = create_artist_sheet_from_source(client, source_url, title_prefix="Simplified Artist Report")
+    target = with_backoff(lambda: client.open_by_key(extract_sheet_id(target_url)))
+
+    removed_tabs = 0
+    for ws in list(target.worksheets()):
+        if ws.title not in cities_for_export:
+            with_backoff(lambda ws=ws: target.del_worksheet(ws))
+            removed_tabs += 1
+
+    sheet_stats: Dict[str, Dict[str, int]] = {}
+    for ws in target.worksheets():
+        sheet_stats[ws.title] = simplify_city_sheet(ws)
+
+    debug = {
+        "available_cities": all_cities,
+        "selected_cities": cities_for_export,
+        "removed_tabs": removed_tabs,
+        "sheet_stats": sheet_stats,
+    }
+    return target_url, debug
 
 
 @dataclass

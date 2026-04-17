@@ -5,10 +5,10 @@ from flask import Flask, jsonify, render_template, request
 
 from sync_artist_report import (
     build_client_from_info,
-    create_artist_sheet_from_source,
+    build_simplified_city_book,
+    list_city_sheets,
     extract_sheet_id,
     parse_service_account_json,
-    sync,
 )
 
 
@@ -21,14 +21,7 @@ def _json_error(message: str, status: int):
 
 def _run_sync(body: Dict[str, Any]):
     source_url = body.get("source_url") or os.getenv("SOURCE_SHEET_URL")
-    target_url = (body.get("target_url") or os.getenv("TARGET_SHEET_URL") or "").strip()
-    auto_create_target = bool(body.get("auto_create_target", True))
-    new_target_created = False
-    source_sheet_name = body.get("source_sheet_name")
-    target_sheet_name = body.get("target_sheet_name")
-    category_filter = body.get("category_filter")
-    source_header_row = int(body.get("source_header_row", 15))
-    target_header_row = int(body.get("target_header_row", 9))
+    selected_cities = body.get("selected_cities") or []
 
     if not source_url:
         return None, _json_error(
@@ -41,21 +34,11 @@ def _run_sync(body: Dict[str, Any]):
         return None, _json_error("SERVICE_ACCOUNT_JSON is not set", 500)
 
     client = build_client_from_info(parse_service_account_json(service_account_json))
-    if not target_url:
-        if not auto_create_target:
-            return None, _json_error("target_url is empty and auto_create_target=false", 400)
-        target_url = create_artist_sheet_from_source(client, source_url)
-        new_target_created = True
 
-    matched, updates, debug = sync(
+    target_url, debug = build_simplified_city_book(
         client=client,
         source_url=source_url,
-        target_url=target_url,
-        source_sheet_name=source_sheet_name,
-        target_sheet_name=target_sheet_name,
-        source_header_row=source_header_row,
-        target_header_row=target_header_row,
-        category_filter=category_filter,
+        selected_cities=selected_cities,
     )
     target_sheet_id = extract_sheet_id(target_url)
     target_open_url = f"https://docs.google.com/spreadsheets/d/{target_sheet_id}/edit"
@@ -64,9 +47,8 @@ def _run_sync(body: Dict[str, Any]):
     )
     return {
         "ok": True,
-        "matched_rows": matched,
-        "updated_cells": updates,
-        "new_target_created": new_target_created,
+        "selected_city_count": len(debug.get("selected_cities", [])),
+        "new_target_created": True,
         "target_open_url": target_open_url,
         "target_xlsx_url": target_xlsx_url,
         "debug": debug,
@@ -126,5 +108,27 @@ def sync_ui_post():
         if error_response:
             return error_response
         return jsonify(result)
+    except Exception as exc:
+        return _json_error(str(exc), 500)
+
+
+@app.post("/cities-ui")
+def cities_ui_post():
+    try:
+        if not _is_same_origin():
+            return _json_error("UI endpoint is same-origin only", 403)
+
+        body: Dict[str, Any] = request.get_json(silent=True) or {}
+        source_url = body.get("source_url") or os.getenv("SOURCE_SHEET_URL")
+        if not source_url:
+            return _json_error("source_url is required", 400)
+
+        service_account_json = os.getenv("SERVICE_ACCOUNT_JSON", "")
+        if not service_account_json:
+            return _json_error("SERVICE_ACCOUNT_JSON is not set", 500)
+
+        client = build_client_from_info(parse_service_account_json(service_account_json))
+        cities = list_city_sheets(client, source_url)
+        return jsonify({"ok": True, "cities": cities})
     except Exception as exc:
         return _json_error(str(exc), 500)

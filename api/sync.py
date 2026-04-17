@@ -4,8 +4,10 @@ from http.server import BaseHTTPRequestHandler
 
 from sync_artist_report import (
     build_client_from_info,
+    build_simplified_city_book,
+    list_city_sheets,
+    extract_sheet_id,
     parse_service_account_json,
-    sync,
 )
 
 
@@ -40,19 +42,16 @@ class handler(BaseHTTPRequestHandler):
             body = json.loads(raw_body.decode("utf-8"))
 
             source_url = body.get("source_url") or os.getenv("SOURCE_SHEET_URL")
-            target_url = body.get("target_url") or os.getenv("TARGET_SHEET_URL")
-            source_sheet_name = body.get("source_sheet_name")
-            target_sheet_name = body.get("target_sheet_name")
-            source_header_row = int(body.get("source_header_row", 9))
-            target_header_row = int(body.get("target_header_row", 9))
+            selected_cities = body.get("selected_cities") or []
+            list_only = bool(body.get("list_cities_only", False))
 
-            if not source_url or not target_url:
+            if not source_url:
                 _json_response(
                     self,
                     400,
                     {
                         "ok": False,
-                        "error": "source_url and target_url are required (body or env vars)",
+                        "error": "source_url is required (body or env vars)",
                     },
                 )
                 return
@@ -63,20 +62,28 @@ class handler(BaseHTTPRequestHandler):
                 return
 
             client = build_client_from_info(parse_service_account_json(service_account_json))
-            matched, updates = sync(
+            if list_only:
+                cities = list_city_sheets(client, source_url)
+                _json_response(self, 200, {"ok": True, "cities": cities})
+                return
+
+            target_url, debug = build_simplified_city_book(
                 client=client,
                 source_url=source_url,
-                target_url=target_url,
-                source_sheet_name=source_sheet_name,
-                target_sheet_name=target_sheet_name,
-                source_header_row=source_header_row,
-                target_header_row=target_header_row,
+                selected_cities=selected_cities,
             )
+            target_sheet_id = extract_sheet_id(target_url)
 
             _json_response(
                 self,
                 200,
-                {"ok": True, "matched_rows": matched, "updated_cells": updates},
+                {
+                    "ok": True,
+                    "selected_city_count": len(debug.get("selected_cities", [])),
+                    "target_open_url": f"https://docs.google.com/spreadsheets/d/{target_sheet_id}/edit",
+                    "target_xlsx_url": f"https://docs.google.com/spreadsheets/d/{target_sheet_id}/export?format=xlsx",
+                    "debug": debug,
+                },
             )
         except Exception as exc:
             _json_response(self, 500, {"ok": False, "error": str(exc)})
