@@ -350,10 +350,11 @@
           a.remove();
           URL.revokeObjectURL(url);
 
-          showResult(
-            `Готово!\nФайл завантажено: ${fname}\nМіст у файлі: ${selected_cities.length || "усі"}`,
-            false
-          );
+          const cityNote =
+            selected_cities.length > 0
+              ? `${selected_cities.length} обраних`
+              : `${citiesLoaded.length} (усі зі списку)`;
+          showResult(`Готово!\nФайл завантажено: ${fname}\nМіст у файлі: ${cityNote}`, false);
         } catch (err) {
           showResult(`Помилка: ${err.message}`, true);
         } finally {
