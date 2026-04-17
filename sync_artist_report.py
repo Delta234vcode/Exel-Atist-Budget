@@ -21,6 +21,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple, TypeVar
 
 import gspread
 from gspread.exceptions import APIError
+from googleapiclient.discovery import build
 from google.oauth2.service_account import Credentials
 
 
@@ -368,25 +369,19 @@ def create_artist_sheet_from_source(
     title_prefix: str = "Artist Report",
 ) -> str:
     """
-    Create a new artist spreadsheet by copying source sheet file.
-    This preserves original formatting/design as-is.
+    Create a new empty spreadsheet via Sheets API.
+    Avoids Drive file-copy operations.
     """
-    source_id = extract_sheet_id(source_url)
     timestamp = datetime.utcnow().strftime("%Y-%m-%d %H-%M")
-    copied = with_backoff(
-        lambda: client.copy(
-            source_id,
-            title=f"{title_prefix} {timestamp}",
-            copy_permissions=False,
-        )
+    sheets_service = build("sheets", "v4", credentials=client.auth, cache_discovery=False)
+    created = with_backoff(
+        lambda: sheets_service.spreadsheets()
+        .create(body={"properties": {"title": f"{title_prefix} {timestamp}"}})
+        .execute()
     )
-
-    if hasattr(copied, "id"):
-        new_id = copied.id
-    elif isinstance(copied, dict) and copied.get("id"):
-        new_id = copied["id"]
-    else:
-        raise ValueError("Could not get new spreadsheet id after copy.")
+    new_id = created.get("spreadsheetId")
+    if not new_id:
+        raise ValueError("Could not get new spreadsheet id after create.")
 
     return f"https://docs.google.com/spreadsheets/d/{new_id}/edit"
 
@@ -413,29 +408,24 @@ def _is_allowed_city_row(row_index: int, row: List[str]) -> bool:
     return title in SIMPLIFIED_ALLOWED_ROWS
 
 
-def simplify_city_sheet(ws: gspread.Worksheet) -> Dict[str, int]:
-    values = with_backoff(lambda: ws.get_all_values())
-    rows_deleted = 0
-    if values:
-        rows_to_delete: List[int] = []
-        for idx, row in enumerate(values, start=1):
-            if not _is_allowed_city_row(idx, row):
-                rows_to_delete.append(idx)
+def simplify_city_values(values: List[List[str]]) -> Tuple[List[List[str]], Dict[str, int]]:
+    if not values:
+        return [], {"rows_deleted": 0, "columns_deleted": 0}
 
-        for row_idx in sorted(rows_to_delete, reverse=True):
-            with_backoff(lambda row_idx=row_idx: ws.delete_rows(row_idx))
-            rows_deleted += 1
+    filtered_rows: List[List[str]] = []
+    for idx, row in enumerate(values, start=1):
+        if _is_allowed_city_row(idx, row):
+            filtered_rows.append(row[:SIMPLIFIED_COLUMNS_TO_KEEP])
 
-    col_deleted = 0
-    values_after = with_backoff(lambda: ws.get_all_values())
-    max_cols = max((len(r) for r in values_after), default=0)
-    if max_cols > SIMPLIFIED_COLUMNS_TO_KEEP:
-        with_backoff(
-            lambda: ws.delete_columns(SIMPLIFIED_COLUMNS_TO_KEEP + 1, max_cols)
-        )
-        col_deleted = max_cols - SIMPLIFIED_COLUMNS_TO_KEEP
+    max_cols_before = max((len(r) for r in values), default=0)
+    max_cols_after = max((len(r) for r in filtered_rows), default=0)
+    columns_deleted = max(0, max_cols_before - max_cols_after)
 
-    return {"rows_deleted": rows_deleted, "columns_deleted": col_deleted}
+    stats = {
+        "rows_deleted": max(0, len(values) - len(filtered_rows)),
+        "columns_deleted": columns_deleted,
+    }
+    return filtered_rows, stats
 
 
 def build_simplified_city_book(
@@ -451,23 +441,49 @@ def build_simplified_city_book(
     if not cities_for_export:
         raise ValueError("No valid city sheets selected.")
 
-    target_url = create_artist_sheet_from_source(client, source_url, title_prefix="Simplified Artist Report")
+    target_url = create_artist_sheet_from_source(
+        client, source_url, title_prefix="Simplified Artist Report"
+    )
     target = with_backoff(lambda: client.open_by_key(extract_sheet_id(target_url)))
 
-    removed_tabs = 0
-    for ws in list(target.worksheets()):
-        if ws.title not in cities_for_export:
-            with_backoff(lambda ws=ws: target.del_worksheet(ws))
-            removed_tabs += 1
-
     sheet_stats: Dict[str, Dict[str, int]] = {}
-    for ws in target.worksheets():
-        sheet_stats[ws.title] = simplify_city_sheet(ws)
+    source_sheets_by_title = {ws.title: ws for ws in source.worksheets()}
+    created_tabs = 0
+    for city_title in cities_for_export:
+        source_ws = source_sheets_by_title.get(city_title)
+        if not source_ws:
+            continue
+        source_values = with_backoff(lambda source_ws=source_ws: source_ws.get_all_values())
+        simplified_values, stats = simplify_city_values(source_values)
+
+        row_count = max(1, len(simplified_values))
+        col_count = max(
+            1, max((len(r) for r in simplified_values), default=SIMPLIFIED_COLUMNS_TO_KEEP)
+        )
+        city_ws = with_backoff(
+            lambda city_title=city_title, row_count=row_count, col_count=col_count: target.add_worksheet(
+                title=city_title,
+                rows=row_count,
+                cols=col_count,
+            )
+        )
+        if simplified_values:
+            with_backoff(
+                lambda city_ws=city_ws, simplified_values=simplified_values: city_ws.update(
+                    "A1", simplified_values
+                )
+            )
+        sheet_stats[city_title] = stats
+        created_tabs += 1
+
+    for ws in list(target.worksheets()):
+        if ws.title == "Sheet1":
+            with_backoff(lambda ws=ws: target.del_worksheet(ws))
 
     debug = {
         "available_cities": all_cities,
         "selected_cities": cities_for_export,
-        "removed_tabs": removed_tabs,
+        "created_tabs": created_tabs,
         "sheet_stats": sheet_stats,
     }
     return target_url, debug

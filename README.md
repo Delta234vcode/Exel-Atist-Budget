@@ -50,7 +50,7 @@ python main.py
 - `SERVICE_ACCOUNT_JSON` — повний JSON ключ сервісного акаунта одним рядком.
 - `SYNC_TOKEN` — секретний токен для захисту endpoint.
 - `SOURCE_SHEET_URL` — (опційно) URL вашої таблиці за замовчуванням.
-- `TARGET_SHEET_URL` — не обов'язкова (створюється нова таблиця з копії source).
+- `TARGET_SHEET_URL` — не обов'язкова (сервіс створює нову таблицю через Sheets API).
 
 ### Робота через UI
 
@@ -71,4 +71,4 @@ curl -X POST "https://YOUR-PROJECT.vercel.app/api/sync" ^
   -d "{\"source_url\":\"https://docs.google.com/spreadsheets/d/170iP6rlKZFqL7qho9okUbL9i4AT-vwkAh4bQXCNN8Vg/edit?usp=sharing\",\"target_url\":\"https://docs.google.com/spreadsheets/d/1VMwwk7fzsCWMo6XOQQWQdXkMbJ4r0g9StR5-FCnanz8/edit?usp=sharing\"}"
 ```
 
-Якщо `SOURCE_SHEET_URL` і `TARGET_SHEET_URL` задані в env, body можна не передавати.
+Якщо `SOURCE_SHEET_URL` заданий в env, body можна не передавати.
