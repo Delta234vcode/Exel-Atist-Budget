@@ -5,6 +5,7 @@ from http.server import BaseHTTPRequestHandler
 from sync_artist_report import (
     build_client_from_info,
     parse_service_account_json,
+    resolve_source_sheet_names,
     sync,
 )
 
@@ -43,7 +44,7 @@ class handler(BaseHTTPRequestHandler):
             target_url = body.get("target_url") or os.getenv("TARGET_SHEET_URL")
             source_sheet_name = body.get("source_sheet_name")
             target_sheet_name = body.get("target_sheet_name")
-            category_filter = body.get("category_filter")
+            selected_cities = body.get("selected_cities")
             source_header_row = int(body.get("source_header_row", 15))
             target_header_row = int(body.get("target_header_row", 9))
 
@@ -64,15 +65,18 @@ class handler(BaseHTTPRequestHandler):
                 return
 
             client = build_client_from_info(parse_service_account_json(service_account_json))
+            multi_sources, single_source = resolve_source_sheet_names(
+                client, source_url, selected_cities, source_sheet_name
+            )
             matched, updates_count, debug = sync(
                 client=client,
                 source_url=source_url,
                 target_url=target_url,
-                source_sheet_name=source_sheet_name,
+                source_sheet_name=single_source,
                 target_sheet_name=target_sheet_name,
                 source_header_row=source_header_row,
                 target_header_row=target_header_row,
-                category_filter=category_filter,
+                source_sheet_names=multi_sources,
             )
 
             _json_response(
@@ -85,5 +89,7 @@ class handler(BaseHTTPRequestHandler):
                     "debug": debug,
                 },
             )
+        except ValueError as exc:
+            _json_response(self, 400, {"ok": False, "error": str(exc)})
         except Exception as exc:
             _json_response(self, 500, {"ok": False, "error": str(exc)})

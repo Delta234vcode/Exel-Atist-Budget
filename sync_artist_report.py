@@ -31,26 +31,6 @@ SCOPES = [
 
 T = TypeVar("T")
 
-CATEGORY_HEADERS = {
-    "fee",
-    "advertisment",
-    "advertisement",
-    "accomodation",
-    "accommodation",
-    "transport",
-    "food",
-    "dressing room",
-    "venue place",
-    "services",
-    "security",
-    "staff",
-    "ticketing service docs",
-    "ticketing service",
-    "vat tax",
-    "techrider",
-    "other costs",
-}
-
 
 def _is_rate_limited_error(exc: Exception) -> bool:
     if not isinstance(exc, APIError):
@@ -107,10 +87,6 @@ def canonicalize(text: str) -> str:
     for old, new in replacements.items():
         text = text.replace(old, new)
     return re.sub(r"\s+", " ", text).strip()
-
-
-def is_category_header(text: str) -> bool:
-    return canonicalize(text) in CATEGORY_HEADERS
 
 
 def best_match_key(target_key: str, source_keys: List[str], threshold: float = 0.72) -> Optional[str]:
@@ -332,11 +308,57 @@ def create_artist_sheet_from_source(
     return f"https://docs.google.com/spreadsheets/d/{new_id}/edit"
 
 
+def is_city_sheet(ws: gspread.Worksheet) -> bool:
+    preview = with_backoff(lambda: ws.get("A1:A8"))
+    flattened = [normalize(row[0]) for row in preview if row]
+    return "city" in flattened and "artist" in flattened
+
+
+def list_city_sheets(client: gspread.Client, source_url: str) -> List[str]:
+    spreadsheet = with_backoff(lambda: client.open_by_key(extract_sheet_id(source_url)))
+    return [ws.title for ws in spreadsheet.worksheets() if is_city_sheet(ws)]
+
+
+def resolve_source_sheet_names(
+    client: gspread.Client,
+    source_url: str,
+    selected_cities: Optional[List[str]],
+    source_sheet_name: Optional[str],
+) -> Tuple[Optional[List[str]], Optional[str]]:
+    """
+    Returns (multi_sheet_titles, single_sheet_name) for sync().
+    If selected_cities is None: legacy — use single_sheet_name (may be None → first sheet).
+    If selected_cities is a list (including []): use exactly those tab titles (UI sends
+    all names when user chose «вибрати всі»). Empty list is invalid.
+    """
+    if selected_cities is None:
+        return None, source_sheet_name
+    titles = [str(t).strip() for t in selected_cities if str(t).strip()]
+    if not titles:
+        raise ValueError("Обери хоча б одне місто або натисни «Вибрати всі».")
+    return titles, None
+
+
 @dataclass
 class SourceRow:
     name: str
     amount: Optional[float]
     link: Optional[str]
+
+
+def merge_source_row_maps(parts: List[Dict[str, SourceRow]]) -> Dict[str, SourceRow]:
+    """Merge rows from several source tabs; same cost name → sum amounts, keep first link."""
+    out: Dict[str, SourceRow] = {}
+    for part in parts:
+        for key, row in part.items():
+            if key not in out:
+                out[key] = SourceRow(name=row.name, amount=row.amount, link=row.link)
+            else:
+                prev = out[key]
+                amt = (prev.amount or 0.0) + (row.amount or 0.0)
+                link = prev.link or row.link
+                out[key] = SourceRow(name=prev.name, amount=amt, link=link)
+    return out
 
 
 def get_source_data(
@@ -434,17 +456,32 @@ def sync(
     target_sheet_name: Optional[str],
     source_header_row: int,
     target_header_row: int,
-    category_filter: Optional[str] = None,
+    source_sheet_names: Optional[List[str]] = None,
 ) -> Tuple[int, int, Dict[str, Any]]:
     source = with_backoff(lambda: client.open_by_key(extract_sheet_id(source_url)))
     target = with_backoff(lambda: client.open_by_key(extract_sheet_id(target_url)))
 
-    source_ws = source.worksheet(source_sheet_name) if source_sheet_name else source.sheet1
     target_ws = target.worksheet(target_sheet_name) if target_sheet_name else target.sheet1
 
-    source_map, detected_source_header_row = get_source_data(
-        source_ws, source_header_row
-    )
+    per_sheet_headers: List[Tuple[str, int]] = []
+    if source_sheet_names:
+        maps: List[Dict[str, SourceRow]] = []
+        for title in source_sheet_names:
+            ws = source.worksheet(title)
+            smap, det = get_source_data(ws, source_header_row)
+            maps.append(smap)
+            per_sheet_headers.append((title, det))
+        source_map = merge_source_row_maps(maps)
+        detected_source_header_row = per_sheet_headers[0][1] if per_sheet_headers else source_header_row
+        source_sheets_used = list(source_sheet_names)
+    else:
+        source_ws = source.worksheet(source_sheet_name) if source_sheet_name else source.sheet1
+        source_map, detected_source_header_row = get_source_data(
+            source_ws, source_header_row
+        )
+        source_sheets_used = [source_ws.title]
+        per_sheet_headers = [(source_ws.title, detected_source_header_row)]
+
     target_values = with_backoff(lambda: target_ws.get_all_values())
     detected_target_header_row = detect_header_row(
         target_values, target_header_row, require_link=False
@@ -464,25 +501,12 @@ def sync(
     matched = 0
     source_keys = list(source_map.keys())
     unmatched_targets: List[str] = []
-    category_filter_norm = canonicalize(category_filter or "")
-    active_target_category = ""
-    category_total = 0.0
-    category_header_row: Optional[int] = None
 
     for row_number, row in enumerate(target_values[target_header_row:], start=target_header_row + 1):
         if target_name_idx >= len(row):
             continue
         target_name = row[target_name_idx].strip()
         if not target_name:
-            continue
-
-        target_name_norm = canonicalize(target_name)
-        if is_category_header(target_name):
-            active_target_category = target_name_norm
-            if category_filter_norm and active_target_category == category_filter_norm:
-                category_header_row = row_number
-
-        if category_filter_norm and active_target_category != category_filter_norm:
             continue
 
         key = normalize(target_name)
@@ -498,14 +522,10 @@ def sync(
 
         matched += 1
         updates.append((row_number, target_amount_idx + 1, format_amount_for_sheet(source_row.amount or 0)))
-        category_total += source_row.amount or 0.0
 
         if source_row.link and target_link_idx is not None:
             link_formula = f'=HYPERLINK("{source_row.link}","invoice")'
             updates.append((row_number, target_link_idx + 1, link_formula))
-
-    if category_filter_norm and category_header_row is not None:
-        updates.append((category_header_row, target_amount_idx + 1, format_amount_for_sheet(category_total)))
 
     if updates:
         payload: List[Dict[str, Any]] = []
@@ -521,8 +541,9 @@ def sync(
     debug = {
         "source_rows_loaded": len(source_map),
         "detected_source_header_row": detected_source_header_row,
+        "source_sheets_used": source_sheets_used,
+        "per_sheet_source_headers": per_sheet_headers,
         "source_keys_sample": list(source_map.keys())[:20],
-        "category_filter": category_filter,
         "target_rows_total": max(0, len(target_values) - target_header_row),
         "detected_target_header_row": detected_target_header_row,
         "target_name_column_index": target_name_idx,

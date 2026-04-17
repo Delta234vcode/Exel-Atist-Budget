@@ -148,6 +148,35 @@
         color: #0a5b2f;
         background: #f3fcf7;
       }
+
+      .city-tools {
+        display: flex;
+        gap: 10px;
+        margin-bottom: 10px;
+        flex-wrap: wrap;
+      }
+
+      .city-list {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+      }
+
+      .city-chip {
+        border: 1px solid #b6dec6;
+        border-radius: 999px;
+        padding: 6px 12px;
+        background: #f3fcf7;
+        color: #0a5b2f;
+        cursor: pointer;
+        font-size: 14px;
+      }
+
+      .city-chip.active {
+        background: #107c41;
+        color: #fff;
+        border-color: #107c41;
+      }
     </style>
   </head>
   <body>
@@ -155,7 +184,7 @@
       <div class="card">
         <div class="header">
           <h1>Excel Artist Budget Sync</h1>
-          <p>Встав загальну таблицю. Таблиця артиста опційна: якщо порожня — створимо автоматично.</p>
+          <p>Два посилання на Google Sheets. Якщо в загальній книзі кілька міст — завантаж міста та обери аркуші (або «Вибрати всі»).</p>
         </div>
 
         <div class="content">
@@ -179,12 +208,15 @@
           </div>
 
           <div class="field">
-            <label for="categoryFilter">Категорія (опційно, напр. Transport)</label>
-            <input
-              id="categoryFilter"
-              type="text"
-              placeholder="Transport"
-            />
+            <label>Міста в загальній таблиці (аркуші)</label>
+            <div class="city-tools">
+              <button id="loadCitiesBtn" class="link-btn" type="button">Завантажити міста</button>
+              <button id="toggleAllCitiesBtn" class="link-btn" type="button">Вибрати всі</button>
+            </div>
+            <div id="cityList" class="city-list"></div>
+            <p style="margin: 8px 0 0; font-size: 13px; color: #4b5563">
+              Якщо кнопку «Завантажити міста» не натискати — береться перший аркуш джерела (як раніше).
+            </p>
           </div>
 
           <button id="runBtn" class="btn">Синхронізувати</button>
@@ -198,7 +230,77 @@
       const resultBox = document.getElementById("result");
       const sourceInput = document.getElementById("sourceUrl");
       const targetInput = document.getElementById("targetUrl");
-      const categoryInput = document.getElementById("categoryFilter");
+      const loadCitiesBtn = document.getElementById("loadCitiesBtn");
+      const toggleAllCitiesBtn = document.getElementById("toggleAllCitiesBtn");
+      const cityList = document.getElementById("cityList");
+      const selectedCities = new Set();
+      let citiesLoaded = [];
+
+      function renderCityButtons() {
+        cityList.innerHTML = "";
+        citiesLoaded.forEach((city) => {
+          const btn = document.createElement("button");
+          btn.type = "button";
+          btn.className = `city-chip ${selectedCities.has(city) ? "active" : ""}`;
+          btn.textContent = city;
+          btn.addEventListener("click", () => {
+            if (selectedCities.has(city)) selectedCities.delete(city);
+            else selectedCities.add(city);
+            renderCityButtons();
+          });
+          cityList.appendChild(btn);
+        });
+      }
+
+      async function loadCities() {
+        const source_url = sourceInput.value.trim();
+        if (!source_url) {
+          showResult("Спочатку встав посилання на загальну таблицю.", true);
+          return;
+        }
+        const response = await fetch("/cities-ui", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ source_url }),
+        });
+        const data = await response.json();
+        if (!response.ok || !data.ok) {
+          throw new Error(data.error || "Не вдалося завантажити міста");
+        }
+        citiesLoaded = data.cities || [];
+        selectedCities.clear();
+        if (citiesLoaded.length === 1) {
+          selectedCities.add(citiesLoaded[0]);
+        }
+        renderCityButtons();
+      }
+
+      loadCitiesBtn.addEventListener("click", async () => {
+        try {
+          await loadCities();
+          showResult(`Знайдено міст-аркушів: ${citiesLoaded.length}`, false);
+        } catch (err) {
+          showResult(`Помилка: ${err.message}`, true);
+        }
+      });
+
+      toggleAllCitiesBtn.addEventListener("click", () => {
+        if (!citiesLoaded.length) return;
+        if (selectedCities.size === citiesLoaded.length) {
+          selectedCities.clear();
+          toggleAllCitiesBtn.textContent = "Вибрати всі";
+        } else {
+          citiesLoaded.forEach((c) => selectedCities.add(c));
+          toggleAllCitiesBtn.textContent = "Зняти всі";
+        }
+        renderCityButtons();
+      });
+
+      sourceInput.addEventListener("change", async () => {
+        citiesLoaded = [];
+        selectedCities.clear();
+        cityList.innerHTML = "";
+      });
 
       function showResult(text, isError = false, links = null) {
         resultBox.style.display = "block";
@@ -236,10 +338,14 @@
       runBtn.addEventListener("click", async () => {
         const source_url = sourceInput.value.trim();
         const target_url = targetInput.value.trim();
-        const category_filter = categoryInput.value.trim();
 
         if (!source_url) {
           showResult("Заповни посилання на загальну таблицю.", true);
+          return;
+        }
+
+        if (citiesLoaded.length > 0 && selectedCities.size === 0) {
+          showResult("Обери хоча б одне місто або натисни «Вибрати всі».", true);
           return;
         }
 
@@ -248,15 +354,19 @@
         resultBox.style.display = "none";
 
         try {
+          const payload = {
+            source_url,
+            target_url,
+            auto_create_target: true,
+          };
+          if (citiesLoaded.length > 0) {
+            payload.selected_cities = Array.from(selectedCities);
+          }
+
           const response = await fetch("/sync-ui", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              source_url,
-              target_url,
-              auto_create_target: true,
-              category_filter,
-            }),
+            body: JSON.stringify(payload),
           });
 
           const data = await response.json();
@@ -264,8 +374,13 @@
             throw new Error(data.error || "Помилка синхронізації");
           }
 
+          const srcSheets =
+            data.debug && data.debug.source_sheets_used && data.debug.source_sheets_used.length
+              ? `\nАркуші джерела: ${data.debug.source_sheets_used.join(", ")}`
+              : "";
+
           showResult(
-            `Готово!\nЗбіглося рядків: ${data.matched_rows}\nОновлено клітинок: ${data.updated_cells}${
+            `Готово!\nЗбіглося рядків: ${data.matched_rows}\nОновлено клітинок: ${data.updated_cells}${srcSheets}${
               data.new_target_created
                 ? "\nСтворено нову таблицю артиста як копію оригіналу."
                 : ""

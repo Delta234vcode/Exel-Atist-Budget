@@ -7,7 +7,9 @@ from sync_artist_report import (
     build_client_from_info,
     create_artist_sheet_from_source,
     extract_sheet_id,
+    list_city_sheets,
     parse_service_account_json,
+    resolve_source_sheet_names,
     sync,
 )
 
@@ -26,7 +28,7 @@ def _run_sync(body: Dict[str, Any]):
     new_target_created = False
     source_sheet_name = body.get("source_sheet_name")
     target_sheet_name = body.get("target_sheet_name")
-    category_filter = body.get("category_filter")
+    selected_cities = body.get("selected_cities")
     source_header_row = int(body.get("source_header_row", 15))
     target_header_row = int(body.get("target_header_row", 9))
 
@@ -47,15 +49,18 @@ def _run_sync(body: Dict[str, Any]):
         target_url = create_artist_sheet_from_source(client, source_url)
         new_target_created = True
 
+    multi_sources, single_source = resolve_source_sheet_names(
+        client, source_url, selected_cities, source_sheet_name
+    )
     matched, updates, debug = sync(
         client=client,
         source_url=source_url,
         target_url=target_url,
-        source_sheet_name=source_sheet_name,
+        source_sheet_name=single_source,
         target_sheet_name=target_sheet_name,
         source_header_row=source_header_row,
         target_header_row=target_header_row,
-        category_filter=category_filter,
+        source_sheet_names=multi_sources,
     )
     target_sheet_id = extract_sheet_id(target_url)
     target_open_url = f"https://docs.google.com/spreadsheets/d/{target_sheet_id}/edit"
@@ -111,6 +116,30 @@ def sync_post():
         if error_response:
             return error_response
         return jsonify(result)
+    except ValueError as exc:
+        return _json_error(str(exc), 400)
+    except Exception as exc:
+        return _json_error(str(exc), 500)
+
+
+@app.post("/cities-ui")
+def cities_ui_post():
+    try:
+        if not _is_same_origin():
+            return _json_error("UI endpoint is same-origin only", 403)
+
+        body: Dict[str, Any] = request.get_json(silent=True) or {}
+        source_url = body.get("source_url") or os.getenv("SOURCE_SHEET_URL")
+        if not source_url:
+            return _json_error("source_url is required", 400)
+
+        service_account_json = os.getenv("SERVICE_ACCOUNT_JSON", "")
+        if not service_account_json:
+            return _json_error("SERVICE_ACCOUNT_JSON is not set", 500)
+
+        client = build_client_from_info(parse_service_account_json(service_account_json))
+        cities = list_city_sheets(client, source_url)
+        return jsonify({"ok": True, "cities": cities})
     except Exception as exc:
         return _json_error(str(exc), 500)
 
@@ -126,5 +155,7 @@ def sync_ui_post():
         if error_response:
             return error_response
         return jsonify(result)
+    except ValueError as exc:
+        return _json_error(str(exc), 400)
     except Exception as exc:
         return _json_error(str(exc), 500)
