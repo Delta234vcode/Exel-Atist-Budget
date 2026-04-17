@@ -13,21 +13,23 @@ from __future__ import annotations
 import argparse
 from datetime import datetime
 import difflib
+import io
+import os
+from pathlib import Path
 import re
 from dataclasses import dataclass
 import json
 import time
-from typing import Any, Callable, Dict, List, Optional, Tuple, TypeVar
+from typing import Any, Callable, Dict, List, Optional, Set, Tuple, TypeVar
 
 import gspread
 from gspread.exceptions import APIError
-from googleapiclient.discovery import build
 from google.oauth2.service_account import Credentials
+from openpyxl import load_workbook
 
 
 SCOPES = [
     "https://www.googleapis.com/auth/spreadsheets",
-    "https://www.googleapis.com/auth/drive",
 ]
 
 T = TypeVar("T")
@@ -363,27 +365,102 @@ def extract_sheet_id(sheet_url: str) -> str:
     return match.group(1)
 
 
-def create_artist_sheet_from_source(
+def resolve_template_xlsx_path(template_path: Optional[str] = None) -> Path:
+    if template_path:
+        return Path(template_path).expanduser().resolve()
+    env = os.getenv("TEMPLATE_XLSX_PATH", "").strip()
+    if env:
+        return Path(env).expanduser().resolve()
+    return Path(__file__).resolve().parent / "template.xlsx"
+
+
+def _sanitize_excel_sheet_title(raw: str, used: Set[str]) -> str:
+    raw = (raw or "").strip() or "City"
+    invalid = '\\/*?:[]'
+    cleaned = "".join("_" if ch in invalid else ch for ch in raw).strip("._") or "City"
+    cleaned = cleaned[:31]
+    candidate = cleaned
+    n = 2
+    while candidate in used:
+        suffix = f"_{n}"
+        candidate = (cleaned[: 31 - len(suffix)] + suffix) if len(cleaned) + len(suffix) > 31 else cleaned + suffix
+        candidate = candidate[:31]
+        n += 1
+    used.add(candidate)
+    return candidate
+
+
+def build_simplified_city_xlsx(
     client: gspread.Client,
     source_url: str,
-    title_prefix: str = "Artist Report",
-) -> str:
+    selected_cities: Optional[List[str]] = None,
+    template_path: Optional[str] = None,
+) -> Tuple[bytes, str, Dict[str, Any]]:
     """
-    Create a new empty spreadsheet via Sheets API.
-    Avoids Drive file-copy operations.
+    Build one .xlsx from repo template: one worksheet per selected city, filled with simplified rows.
     """
-    timestamp = datetime.utcnow().strftime("%Y-%m-%d %H-%M")
-    sheets_service = build("sheets", "v4", credentials=client.auth, cache_discovery=False)
-    created = with_backoff(
-        lambda: sheets_service.spreadsheets()
-        .create(body={"properties": {"title": f"{title_prefix} {timestamp}"}})
-        .execute()
-    )
-    new_id = created.get("spreadsheetId")
-    if not new_id:
-        raise ValueError("Could not get new spreadsheet id after create.")
+    path = resolve_template_xlsx_path(template_path)
+    if not path.is_file():
+        raise FileNotFoundError(f"template.xlsx not found at {path}")
 
-    return f"https://docs.google.com/spreadsheets/d/{new_id}/edit"
+    source = with_backoff(lambda: client.open_by_key(extract_sheet_id(source_url)))
+    selected_set = {c.strip() for c in (selected_cities or []) if c and c.strip()}
+    all_cities = [ws.title for ws in source.worksheets() if is_city_sheet(ws)]
+    cities_for_export = [title for title in all_cities if not selected_set or title in selected_set]
+
+    if not cities_for_export:
+        raise ValueError("No valid city sheets selected.")
+
+    wb = load_workbook(path)
+    if "Template" in wb.sheetnames:
+        template_ws = wb["Template"]
+    else:
+        template_ws = wb[wb.sheetnames[0]]
+
+    source_sheets_by_title = {ws.title: ws for ws in source.worksheets()}
+    sheet_stats: Dict[str, Dict[str, int]] = {}
+    copied = 0
+
+    for city_title in cities_for_export:
+        source_ws = source_sheets_by_title.get(city_title)
+        if not source_ws:
+            continue
+        source_values = with_backoff(lambda source_ws=source_ws: source_ws.get_all_values())
+        simplified_values, stats = simplify_city_values(source_values)
+
+        tab_title = _sanitize_excel_sheet_title(city_title, set(wb.sheetnames))
+        ws = wb.copy_worksheet(template_ws)
+        ws.title = tab_title
+
+        for row in ws.iter_rows(min_row=1, max_row=ws.max_row, max_col=ws.max_column):
+            for cell in row:
+                cell.value = None
+
+        for ri, row in enumerate(simplified_values, start=1):
+            for ci, val in enumerate(row[:SIMPLIFIED_COLUMNS_TO_KEEP], start=1):
+                ws.cell(row=ri, column=ci, value=val)
+
+        sheet_stats[city_title] = stats
+        copied += 1
+
+    if copied == 0:
+        raise ValueError("No city worksheets matched the source.")
+
+    wb.remove(template_ws)
+
+    buf = io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    timestamp = datetime.utcnow().strftime("%Y-%m-%d_%H-%M")
+    filename = f"artist_report_{timestamp}.xlsx"
+    debug: Dict[str, Any] = {
+        "available_cities": all_cities,
+        "selected_cities": cities_for_export,
+        "template_path": str(path),
+        "sheet_stats": sheet_stats,
+        "worksheets_written": copied,
+    }
+    return buf.getvalue(), filename, debug
 
 
 def list_city_sheets(client: gspread.Client, source_url: str) -> List[str]:
@@ -426,67 +503,6 @@ def simplify_city_values(values: List[List[str]]) -> Tuple[List[List[str]], Dict
         "columns_deleted": columns_deleted,
     }
     return filtered_rows, stats
-
-
-def build_simplified_city_book(
-    client: gspread.Client,
-    source_url: str,
-    selected_cities: Optional[List[str]] = None,
-) -> Tuple[str, Dict[str, Any]]:
-    source = with_backoff(lambda: client.open_by_key(extract_sheet_id(source_url)))
-    selected_set = {c.strip() for c in (selected_cities or []) if c and c.strip()}
-    all_cities = [ws.title for ws in source.worksheets() if is_city_sheet(ws)]
-    cities_for_export = [title for title in all_cities if not selected_set or title in selected_set]
-
-    if not cities_for_export:
-        raise ValueError("No valid city sheets selected.")
-
-    target_url = create_artist_sheet_from_source(
-        client, source_url, title_prefix="Simplified Artist Report"
-    )
-    target = with_backoff(lambda: client.open_by_key(extract_sheet_id(target_url)))
-
-    sheet_stats: Dict[str, Dict[str, int]] = {}
-    source_sheets_by_title = {ws.title: ws for ws in source.worksheets()}
-    created_tabs = 0
-    for city_title in cities_for_export:
-        source_ws = source_sheets_by_title.get(city_title)
-        if not source_ws:
-            continue
-        source_values = with_backoff(lambda source_ws=source_ws: source_ws.get_all_values())
-        simplified_values, stats = simplify_city_values(source_values)
-
-        row_count = max(1, len(simplified_values))
-        col_count = max(
-            1, max((len(r) for r in simplified_values), default=SIMPLIFIED_COLUMNS_TO_KEEP)
-        )
-        city_ws = with_backoff(
-            lambda city_title=city_title, row_count=row_count, col_count=col_count: target.add_worksheet(
-                title=city_title,
-                rows=row_count,
-                cols=col_count,
-            )
-        )
-        if simplified_values:
-            with_backoff(
-                lambda city_ws=city_ws, simplified_values=simplified_values: city_ws.update(
-                    "A1", simplified_values
-                )
-            )
-        sheet_stats[city_title] = stats
-        created_tabs += 1
-
-    for ws in list(target.worksheets()):
-        if ws.title == "Sheet1":
-            with_backoff(lambda ws=ws: target.del_worksheet(ws))
-
-    debug = {
-        "available_cities": all_cities,
-        "selected_cities": cities_for_export,
-        "created_tabs": created_tabs,
-        "sheet_stats": sheet_stats,
-    }
-    return target_url, debug
 
 
 @dataclass

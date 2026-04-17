@@ -183,7 +183,7 @@
       <div class="card">
         <div class="header">
           <h1>Excel Artist Budget Sync</h1>
-          <p>Встав загальну таблицю. Таблиця артиста опційна: якщо порожня — створимо автоматично.</p>
+          <p>Встав посилання на Google Sheet. Дані з вибраних міст підставляються у локальний шаблон <code>template.xlsx</code> і завантажуються як один .xlsx файл.</p>
         </div>
 
         <div class="content">
@@ -222,37 +222,10 @@
       const selectedCities = new Set();
       let citiesLoaded = [];
 
-      function showResult(text, isError = false, links = null) {
+      function showResult(text, isError = false) {
         resultBox.style.display = "block";
         resultBox.className = `result ${isError ? "error" : "ok"}`;
         resultBox.textContent = text;
-
-        if (links && !isError) {
-          const linksWrap = document.createElement("div");
-          linksWrap.className = "links";
-
-          if (links.openUrl) {
-            const openLink = document.createElement("a");
-            openLink.className = "link-btn";
-            openLink.href = links.openUrl;
-            openLink.target = "_blank";
-            openLink.rel = "noopener noreferrer";
-            openLink.textContent = "Відкрити оновлену таблицю";
-            linksWrap.appendChild(openLink);
-          }
-
-          if (links.xlsxUrl) {
-            const xlsxLink = document.createElement("a");
-            xlsxLink.className = "link-btn";
-            xlsxLink.href = links.xlsxUrl;
-            xlsxLink.target = "_blank";
-            xlsxLink.rel = "noopener noreferrer";
-            xlsxLink.textContent = "Скачати XLSX файл";
-            linksWrap.appendChild(xlsxLink);
-          }
-
-          resultBox.appendChild(linksWrap);
-        }
       }
 
       function renderCityButtons() {
@@ -337,7 +310,7 @@
         }
 
         runBtn.disabled = true;
-        runBtn.textContent = "Синхронізую...";
+        runBtn.textContent = "Готую файл...";
         resultBox.style.display = "none";
 
         try {
@@ -350,24 +323,42 @@
             }),
           });
 
-          const data = await response.json();
-          if (!response.ok || !data.ok) {
-            throw new Error(data.error || "Помилка синхронізації");
+          const ct = response.headers.get("Content-Type") || "";
+          if (!response.ok) {
+            const errBody = await response.json().catch(() => ({}));
+            throw new Error(errBody.error || response.statusText);
+          }
+          if (ct.includes("application/json")) {
+            const data = await response.json();
+            throw new Error(data.error || "Неочікувана відповідь сервера");
           }
 
+          const blob = await response.blob();
+          let fname = "artist_report.xlsx";
+          const cd = response.headers.get("Content-Disposition");
+          if (cd) {
+            const m = cd.match(/filename="([^"]+)"/i);
+            if (m) fname = m[1];
+          }
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement("a");
+          a.href = url;
+          a.download = fname;
+          a.rel = "noopener";
+          document.body.appendChild(a);
+          a.click();
+          a.remove();
+          URL.revokeObjectURL(url);
+
           showResult(
-            `Готово!\nОбрано міст: ${data.selected_city_count}\nСтворено нову таблицю зі спрощеними аркушами.`,
-            false,
-            {
-              openUrl: data.target_open_url,
-              xlsxUrl: data.target_xlsx_url,
-            }
+            `Готово!\nФайл завантажено: ${fname}\nМіст у файлі: ${selected_cities.length || "усі"}`,
+            false
           );
         } catch (err) {
           showResult(`Помилка: ${err.message}`, true);
         } finally {
           runBtn.disabled = false;
-          runBtn.textContent = "Синхронізувати";
+          runBtn.textContent = "Згенерувати спрощені аркуші";
         }
       });
     </script>

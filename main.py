@@ -1,13 +1,13 @@
+import base64
 import os
 from typing import Any, Dict
 
-from flask import Flask, jsonify, render_template, request
+from flask import Flask, Response, jsonify, render_template, request
 
 from sync_artist_report import (
     build_client_from_info,
-    build_simplified_city_book,
+    build_simplified_city_xlsx,
     list_city_sheets,
-    extract_sheet_id,
     parse_service_account_json,
 )
 
@@ -35,22 +35,16 @@ def _run_sync(body: Dict[str, Any]):
 
     client = build_client_from_info(parse_service_account_json(service_account_json))
 
-    target_url, debug = build_simplified_city_book(
+    xlsx_bytes, filename, debug = build_simplified_city_xlsx(
         client=client,
         source_url=source_url,
         selected_cities=selected_cities,
     )
-    target_sheet_id = extract_sheet_id(target_url)
-    target_open_url = f"https://docs.google.com/spreadsheets/d/{target_sheet_id}/edit"
-    target_xlsx_url = (
-        f"https://docs.google.com/spreadsheets/d/{target_sheet_id}/export?format=xlsx"
-    )
     return {
         "ok": True,
         "selected_city_count": len(debug.get("selected_cities", [])),
-        "new_target_created": True,
-        "target_open_url": target_open_url,
-        "target_xlsx_url": target_xlsx_url,
+        "filename": filename,
+        "xlsx_base64": base64.standard_b64encode(xlsx_bytes).decode("ascii"),
         "debug": debug,
     }, None
 
@@ -93,6 +87,10 @@ def sync_post():
         if error_response:
             return error_response
         return jsonify(result)
+    except ValueError as exc:
+        return _json_error(str(exc), 400)
+    except FileNotFoundError as exc:
+        return _json_error(str(exc), 500)
     except Exception as exc:
         return _json_error(str(exc), 500)
 
@@ -104,10 +102,33 @@ def sync_ui_post():
             return _json_error("UI endpoint is same-origin only", 403)
 
         body: Dict[str, Any] = request.get_json(silent=True) or {}
-        result, error_response = _run_sync(body)
-        if error_response:
-            return error_response
-        return jsonify(result)
+        source_url = body.get("source_url") or os.getenv("SOURCE_SHEET_URL")
+        selected_cities = body.get("selected_cities") or []
+
+        if not source_url:
+            return _json_error("source_url is required (body or env vars)", 400)
+
+        service_account_json = os.getenv("SERVICE_ACCOUNT_JSON", "")
+        if not service_account_json:
+            return _json_error("SERVICE_ACCOUNT_JSON is not set", 500)
+
+        client = build_client_from_info(parse_service_account_json(service_account_json))
+        xlsx_bytes, filename, _debug = build_simplified_city_xlsx(
+            client=client,
+            source_url=source_url,
+            selected_cities=selected_cities,
+        )
+        return Response(
+            xlsx_bytes,
+            mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            headers={
+                "Content-Disposition": f'attachment; filename="{filename}"',
+            },
+        )
+    except FileNotFoundError as exc:
+        return _json_error(str(exc), 500)
+    except ValueError as exc:
+        return _json_error(str(exc), 400)
     except Exception as exc:
         return _json_error(str(exc), 500)
 

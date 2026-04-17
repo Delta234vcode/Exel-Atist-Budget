@@ -1,12 +1,12 @@
+import base64
 import json
 import os
 from http.server import BaseHTTPRequestHandler
 
 from sync_artist_report import (
     build_client_from_info,
-    build_simplified_city_book,
+    build_simplified_city_xlsx,
     list_city_sheets,
-    extract_sheet_id,
     parse_service_account_json,
 )
 
@@ -67,12 +67,11 @@ class handler(BaseHTTPRequestHandler):
                 _json_response(self, 200, {"ok": True, "cities": cities})
                 return
 
-            target_url, debug = build_simplified_city_book(
+            xlsx_bytes, filename, debug = build_simplified_city_xlsx(
                 client=client,
                 source_url=source_url,
                 selected_cities=selected_cities,
             )
-            target_sheet_id = extract_sheet_id(target_url)
 
             _json_response(
                 self,
@@ -80,8 +79,8 @@ class handler(BaseHTTPRequestHandler):
                 {
                     "ok": True,
                     "selected_city_count": len(debug.get("selected_cities", [])),
-                    "target_open_url": f"https://docs.google.com/spreadsheets/d/{target_sheet_id}/edit",
-                    "target_xlsx_url": f"https://docs.google.com/spreadsheets/d/{target_sheet_id}/export?format=xlsx",
+                    "filename": filename,
+                    "xlsx_base64": base64.standard_b64encode(xlsx_bytes).decode("ascii"),
                     "debug": debug,
                 },
             )
