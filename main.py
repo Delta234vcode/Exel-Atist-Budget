@@ -11,6 +11,7 @@ from sync_artist_report import (
     parse_service_account_json,
     resolve_source_sheet_names,
     sync,
+    transform_artist_report_layout,
 )
 
 
@@ -52,6 +53,29 @@ def _run_sync(body: Dict[str, Any]):
     multi_sources, single_source = resolve_source_sheet_names(
         client, source_url, selected_cities, source_sheet_name
     )
+    if new_target_created:
+        transform_debug = transform_artist_report_layout(
+            client=client,
+            target_url=target_url,
+            sheet_names=multi_sources,
+            target_sheet_name=single_source,
+            remove_other_sheets=bool(multi_sources),
+        )
+        target_sheet_id = extract_sheet_id(target_url)
+        target_open_url = f"https://docs.google.com/spreadsheets/d/{target_sheet_id}/edit"
+        target_xlsx_url = (
+            f"https://docs.google.com/spreadsheets/d/{target_sheet_id}/export?format=xlsx"
+        )
+        return {
+            "ok": True,
+            "matched_rows": 0,
+            "updated_cells": 0,
+            "new_target_created": True,
+            "target_open_url": target_open_url,
+            "target_xlsx_url": target_xlsx_url,
+            "debug": transform_debug,
+        }, None
+
     matched, updates, debug = sync(
         client=client,
         source_url=source_url,

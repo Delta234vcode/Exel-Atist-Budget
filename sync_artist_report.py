@@ -31,6 +31,76 @@ SCOPES = [
 
 T = TypeVar("T")
 
+ARTIST_LAYOUT_ROWS: List[Tuple[int, str, List[str]]] = [
+    (10, "Artist fee band", ["artist fee band", "artist fee band 2"]),
+    (17, "Meta Targeting", ["fca targeting", "meta targeting"]),
+    (18, "Tik-Tok targeting", ["tik tok", "tik tok targeting", "tiktok targeting"]),
+    (19, "Production videos and visual", ["production videos and visual"]),
+    (20, "Instagram publics", ["instagram publics", "ads sofiya"]),
+    (21, "Mticket targeting", ["mticket", "mticket targeting"]),
+    (23, "Posters 500 p.", ["posters 500 p"]),
+    (27, "hotel band and artist", ["hotel band and artist", "hotel"]),
+    (28, "hotel FCA", ["hotel fca"]),
+    (30, "artist transport", ["artist transport"]),
+    (31, "band transport", ["band transport"]),
+    (32, "FCA", ["avia fca", "avia", "local", "avia org", "bus"]),
+    (34, "band and artist", ["band", "nosov"]),
+    (35, "FCA", ["fca"]),
+    (37, "Catering", ["catering"]),
+    (38, "Other costs", ["other costs"]),
+    (40, "venue rent", ["venue rent", "venue rent 2"]),
+    (42, "services", ["services"]),
+    (43, "other costs", ["other services"]),
+    (45, "security", ["security"]),
+    (47, "marketing", ["marketing"]),
+    (48, "targeting", ["targeting"]),
+    (49, "technical director", ["technical director"]),
+    (50, "designer", ["designer"]),
+    (51, "admin", ["admin"]),
+    (52, "tour managers 2 people", ["tour managers 2 people", "tour managers 2 peple", "tour manager"]),
+    (54, "ticket operator services", ["selling mticket", "selling artist production", "selling kontramarka de", "selling kartina"]),
+    (56, "VAT 7%", ["vat difference", "author society 6"]),
+    (58, "Feyeria", ["techrider artist", "feyeria"]),
+    (59, "Band stuff", ["band stuff"]),
+    (61, "unexpected expenses", ["unexpected expenses"]),
+    (62, "бейджи", ["бейджи"]),
+    (63, "таблички", ["таблички"]),
+    (64, "доставка", ["доставка"]),
+    (65, "Author society service", ["author society service"]),
+    (66, "other", ["other"]),
+]
+
+ARTIST_STATIC_ROWS: Dict[int, List[Any]] = {
+    7: ["", "PLAN EU", "FACT EU", "AMOUNT", "EXCHANGE"],
+    9: ["FEE", "PLAN EUR", "FACT EUR", "Description", ""],
+    11: ["Advertisment", "", "", "=SUM(C13:C25)", ""],
+    12: ["Print", "", "", "", ""],
+    13: ["", 0, 0, "", ""],
+    14: ["", 0, 0, "", ""],
+    15: ["", 0, 0, "", ""],
+    16: ["Digital", "", "", "", ""],
+    22: ["Outdoor", "", "", "", ""],
+    24: ["", 0, 0, "", ""],
+    25: ["", 0, 0, "", ""],
+    26: ["Accomodation", "", "", "=SUM(C27:C28)", ""],
+    29: ["Transport", "", "", "=SUM(C30:C32)", ""],
+    33: ["Food", "", "", "=SUM(C34:C35)", ""],
+    36: ["Dressing Room", "", "", "=SUM(C37:C38)", ""],
+    39: ["Venue place", "", "", "=C40", ""],
+    41: ["Services", "", "", "=SUM(C42:C43)", ""],
+    44: ["Security", "", "", "=SUM(C45)", ""],
+    46: ["Staff", "", "", "=SUM(C47:C52)", ""],
+    53: ["Ticketing service & docs", "", "", "=SUM(C54)", ""],
+    55: ["VAT & TAX", "", "", "=SUM(C56)", ""],
+    57: ["Techrider", "", "", "=SUM(C58:C59)", ""],
+    60: ["Other costs", "", "", "=SUM(C61:C66)", ""],
+    67: ["Total:", "=SUM(B10:B66)", "=SUM(C10:C66)", "", ""],
+    69: ["RESULT", "PLAN EUR", "FACT EUR", "", ""],
+    70: ["Balance", "=B8-B67", "=C8-C67", "", ""],
+    71: ["Profit Artist (80%)", "=B70*80%", "=C70*80%", "", ""],
+    72: ["Profit FCA (20%)", "=B70-B71", "=C70-C71", "", ""],
+}
+
 
 def _is_rate_limited_error(exc: Exception) -> bool:
     if not isinstance(exc, APIError):
@@ -319,6 +389,54 @@ def list_city_sheets(client: gspread.Client, source_url: str) -> List[str]:
     return [ws.title for ws in spreadsheet.worksheets() if is_city_sheet(ws)]
 
 
+def get_first_column_hyperlinks(ws: gspread.Worksheet) -> Dict[int, str]:
+    """Read rich-text/plain hyperlinks from column A via Sheets grid data."""
+    links: Dict[int, str] = {}
+    try:
+        metadata = with_backoff(
+            lambda: ws.spreadsheet.fetch_sheet_metadata(
+                params={
+                    "includeGridData": "true",
+                    "ranges": f"'{ws.title}'!A:A",
+                }
+            )
+        )
+    except Exception:
+        return links
+
+    for sheet in metadata.get("sheets", []):
+        for data in sheet.get("data", []):
+            for row_idx, row_data in enumerate(data.get("rowData", []), start=1):
+                values = row_data.get("values", [])
+                if not values:
+                    continue
+                cell = values[0]
+                link = cell.get("hyperlink")
+                if not link:
+                    link = (
+                        cell.get("userEnteredFormat", {})
+                        .get("textFormat", {})
+                        .get("link", {})
+                        .get("uri")
+                    )
+                if not link:
+                    for run in cell.get("textFormatRuns", []):
+                        link = run.get("format", {}).get("link", {}).get("uri")
+                        if link:
+                            break
+                if link:
+                    links[row_idx] = link
+    return links
+
+
+def hyperlink_formula(label: str, link: Optional[str]) -> str:
+    if not link:
+        return label
+    safe_link = link.replace('"', '""')
+    safe_label = label.replace('"', '""')
+    return f'=HYPERLINK("{safe_link}","{safe_label}")'
+
+
 def resolve_source_sheet_names(
     client: gspread.Client,
     source_url: str,
@@ -344,6 +462,7 @@ class SourceRow:
     name: str
     amount: Optional[float]
     link: Optional[str]
+    description: Optional[str] = None
 
 
 def merge_source_row_maps(parts: List[Dict[str, SourceRow]]) -> Dict[str, SourceRow]:
@@ -352,12 +471,23 @@ def merge_source_row_maps(parts: List[Dict[str, SourceRow]]) -> Dict[str, Source
     for part in parts:
         for key, row in part.items():
             if key not in out:
-                out[key] = SourceRow(name=row.name, amount=row.amount, link=row.link)
+                out[key] = SourceRow(
+                    name=row.name,
+                    amount=row.amount,
+                    link=row.link,
+                    description=row.description,
+                )
             else:
                 prev = out[key]
                 amt = (prev.amount or 0.0) + (row.amount or 0.0)
                 link = prev.link or row.link
-                out[key] = SourceRow(name=prev.name, amount=amt, link=link)
+                description = prev.description or row.description
+                out[key] = SourceRow(
+                    name=prev.name,
+                    amount=amt,
+                    link=link,
+                    description=description,
+                )
     return out
 
 
@@ -368,6 +498,7 @@ def get_source_data(
     formula_values = with_backoff(
         lambda: ws.get_all_values(value_render_option="FORMULA")
     )
+    rich_links = get_first_column_hyperlinks(ws)
     if not values:
         raise ValueError("Source sheet is empty.")
     header_row = detect_header_row(values, header_row, require_link=True)
@@ -406,12 +537,14 @@ def get_source_data(
         if amount is None:
             amount = 0.0
 
-        link = None
+        link = rich_links.get(row_number)
+        description = None
         if link_idx is not None and link_idx < len(row):
             maybe_link = row[link_idx].strip()
             if "http://" in maybe_link or "https://" in maybe_link:
-                link = maybe_link
+                link = link or maybe_link
             else:
+                description = maybe_link or None
                 formula_row = (
                     formula_values[row_number - 1]
                     if row_number - 1 < len(formula_values)
@@ -425,7 +558,7 @@ def get_source_data(
                 if isinstance(formula, str) and "HYPERLINK" in formula.upper():
                     m = re.search(r'"(https?://[^"]+)"', formula)
                     if m:
-                        link = m.group(1)
+                        link = link or m.group(1)
         # Fallback: try finding a hyperlink formula in any cell of the row.
         if not link:
             formula_row = (
@@ -440,12 +573,168 @@ def get_source_data(
                         link = m.group(1)
                         break
 
-        result[normalize(name)] = SourceRow(name=name, amount=amount, link=link)
+        result[normalize(name)] = SourceRow(
+            name=name,
+            amount=amount,
+            link=link,
+            description=description,
+        )
     return result, header_row
 
 
 def format_amount_for_sheet(amount: float) -> str:
     return f"{amount:.2f}".rstrip("0").rstrip(".")
+
+
+def _cell_value(row: List[str], idx: int) -> str:
+    return row[idx].strip() if idx < len(row) and row[idx] is not None else ""
+
+
+def _combine_display_values(values: List[str]) -> Any:
+    cleaned = [v for v in values if str(v).strip()]
+    if not cleaned:
+        return 0
+    if any(str(v).strip().upper() in {"#REF!", "#VALUE!", "#ERROR!"} for v in cleaned):
+        return "#REF!"
+
+    parsed = [parse_number(str(v)) for v in cleaned]
+    if all(v is not None for v in parsed):
+        total = sum(v or 0 for v in parsed)
+        return format_amount_for_sheet(total)
+    if len(cleaned) == 1:
+        return cleaned[0]
+    return " + ".join(cleaned)
+
+
+def _build_source_rows_by_key(
+    values: List[List[str]], hyperlinks: Dict[int, str]
+) -> Dict[str, List[Dict[str, Any]]]:
+    by_key: Dict[str, List[Dict[str, Any]]] = {}
+    for row_number, row in enumerate(values, start=1):
+        name = _cell_value(row, 0)
+        if not name:
+            continue
+        key = normalize(name)
+        by_key.setdefault(key, []).append(
+            {
+                "row": row_number,
+                "name": name,
+                "plan": _cell_value(row, 1),
+                "fact": _cell_value(row, 4) or _cell_value(row, 2),
+                "description": _cell_value(row, 5),
+                "link": hyperlinks.get(row_number),
+            }
+        )
+    return by_key
+
+
+def _aggregate_artist_row(
+    by_key: Dict[str, List[Dict[str, Any]]], aliases: List[str]
+) -> Tuple[Any, Any, str, Optional[str]]:
+    plan_values: List[str] = []
+    fact_values: List[str] = []
+    description = ""
+    link: Optional[str] = None
+
+    for alias in aliases:
+        for row in by_key.get(normalize(alias), []):
+            plan_values.append(str(row.get("plan") or ""))
+            fact_values.append(str(row.get("fact") or ""))
+            if not description and row.get("description"):
+                description = str(row["description"])
+            if not link and row.get("link"):
+                link = str(row["link"])
+
+    return (
+        _combine_display_values(plan_values),
+        _combine_display_values(fact_values),
+        description,
+        link,
+    )
+
+
+def transform_worksheet_to_artist_layout(ws: gspread.Worksheet) -> Dict[str, Any]:
+    """
+    Convert a copied source city worksheet into the compact artist-facing layout.
+    This intentionally removes source-only columns/rows and keeps hyperlinks on row labels.
+    """
+    values = with_backoff(lambda: ws.get_all_values())
+    hyperlinks = get_first_column_hyperlinks(ws)
+    by_key = _build_source_rows_by_key(values, hyperlinks)
+
+    def source(row: int, col: int) -> Any:
+        if row - 1 < len(values):
+            return _cell_value(values[row - 1], col - 1)
+        return ""
+
+    rows: List[List[Any]] = [["", "", "", "", ""] for _ in range(72)]
+    rows[2] = ["City", source(3, 2), "", "", ""]
+    rows[3] = ["Data", source(4, 2), "", "", ""]
+    rows[4] = ["Venue", source(5, 2), "", "", ""]
+    rows[5] = ["Artist", source(6, 2), "", "", ""]
+    rows[7] = [
+        hyperlink_formula("Selling total", hyperlinks.get(14) or hyperlinks.get(8)),
+        source(14, 2),
+        source(14, 3),
+        source(14, 4),
+        0,
+    ]
+
+    for row_number, row_values in ARTIST_STATIC_ROWS.items():
+        rows[row_number - 1] = row_values
+
+    for row_number, label, aliases in ARTIST_LAYOUT_ROWS:
+        plan, fact, description, link = _aggregate_artist_row(by_key, aliases)
+        if row_number == 54:
+            plan = "=B8*15%"
+            fact = "=C8*15%"
+        elif row_number == 56:
+            plan = "=B8*7%"
+            fact = "=C8*7%"
+        rows[row_number - 1] = [
+            hyperlink_formula(label, link),
+            plan,
+            fact,
+            description,
+            "",
+        ]
+
+    with_backoff(lambda: ws.update("A1:E72", rows, value_input_option="USER_ENTERED"))
+    if getattr(ws, "col_count", 0) > 5:
+        with_backoff(lambda: ws.delete_columns(6, ws.col_count))
+    if getattr(ws, "row_count", 0) > 72:
+        with_backoff(lambda: ws.delete_rows(73, ws.row_count))
+
+    return {
+        "sheet": ws.title,
+        "rows_written": 72,
+        "columns_kept": 5,
+        "source_rows_seen": len(values),
+    }
+
+
+def transform_artist_report_layout(
+    client: gspread.Client,
+    target_url: str,
+    sheet_names: Optional[List[str]] = None,
+    target_sheet_name: Optional[str] = None,
+    remove_other_sheets: bool = False,
+) -> Dict[str, Any]:
+    target = with_backoff(lambda: client.open_by_key(extract_sheet_id(target_url)))
+    if sheet_names:
+        worksheets = [target.worksheet(title) for title in sheet_names]
+        if remove_other_sheets:
+            keep = set(sheet_names)
+            for ws in list(target.worksheets()):
+                if ws.title not in keep and len(target.worksheets()) > 1:
+                    with_backoff(lambda ws=ws: target.del_worksheet(ws))
+    else:
+        worksheets = [target.worksheet(target_sheet_name)] if target_sheet_name else [target.sheet1]
+
+    stats = []
+    for ws in worksheets:
+        stats.append(transform_worksheet_to_artist_layout(ws))
+    return {"transformed_sheets": stats}
 
 
 def sync(

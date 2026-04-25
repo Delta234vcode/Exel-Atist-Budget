@@ -374,18 +374,24 @@
             throw new Error(data.error || "Помилка синхронізації");
           }
 
-          const srcSheets =
-            data.debug && data.debug.source_sheets_used && data.debug.source_sheets_used.length
-              ? `\nАркуші джерела: ${data.debug.source_sheets_used.join(", ")}`
+          const transformedSheets =
+            data.debug && data.debug.transformed_sheets
+              ? data.debug.transformed_sheets.map((s) => s.sheet).join(", ")
               : "";
+          const srcSheets =
+            transformedSheets
+              ? `\nПеретворені аркуші: ${transformedSheets}`
+              : data.debug && data.debug.source_sheets_used && data.debug.source_sheets_used.length
+                ? `\nАркуші джерела: ${data.debug.source_sheets_used.join(", ")}`
+                : "";
 
           showResult(
-            `Готово!\nЗбіглося рядків: ${data.matched_rows}\nОновлено клітинок: ${data.updated_cells}${srcSheets}${
+            `Готово!${transformedSheets ? "" : `\nЗбіглося рядків: ${data.matched_rows}\nОновлено клітинок: ${data.updated_cells}`}${srcSheets}${
               data.new_target_created
-                ? "\nСтворено нову таблицю артиста як копію оригіналу."
+                ? "\nСтворено нову таблицю артиста з очищеної таблиці 1."
                 : ""
             }${
-              data.matched_rows === 0 && data.debug
+              !transformedSheets && data.matched_rows === 0 && data.debug
                 ? `\n\nДіагностика:\nsource_rows_loaded: ${data.debug.source_rows_loaded}\ndetected_source_header_row: ${data.debug.detected_source_header_row}\nsource_keys_sample: ${(data.debug.source_keys_sample || []).join(", ")}\ntarget_rows_total: ${data.debug.target_rows_total}\ndetected_target_header_row: ${data.debug.detected_target_header_row}\nname_col_idx: ${data.debug.target_name_column_index}\namount_col_idx: ${data.debug.target_amount_column_index}\nunmatched sample: ${(data.debug.unmatched_targets_sample || []).join(", ")}`
                 : ""
             }`,
